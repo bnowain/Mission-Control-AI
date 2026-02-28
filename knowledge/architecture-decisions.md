@@ -2,6 +2,28 @@
 
 ---
 
+### Warm/Cold VRAM Awareness + Codex Confidence Integration — Phase 3 Requirement — 2026-02-28
+**Logged by:** claude
+**Severity:** 🟡 Phase 3 — do not implement in Phase 1/2
+
+**Decision:** The router's warm/cold VRAM state awareness and the Codex confidence_score must be connected in Phase 3. Two systems that are currently independent need to become a feedback loop.
+
+**Links:**
+1. `confidence_score >= 0.85` on a Codex entry → router should skip the cheap model and route directly to the known-good model, then pre-warm it before the task starts.
+2. `confidence_score < 0.50` → try cheapest model first; accept cold-start penalty since we're learning.
+3. `tokens_per_second` in `execution_logs` is currently contaminated by cold-start VRAM load time. In Phase 3, track `tokens_per_second_cold` (first call) and `tokens_per_second_warm` (subsequent) separately so model performance comparisons are accurate.
+4. Track escalation_rate per issue signature: if a task type escalates 8/10 times, pre-warm the escalation target when that task is queued.
+
+**What to build in Phase 3:**
+- `app/router/warmup_manager.py` — polls `GET /api/ps` on Ollama to track warm/cold state
+- `execution_logs`: add `tokens_per_second_cold REAL` + `tokens_per_second_warm REAL` columns (additive migration)
+- `master_codex`: add `escalation_rate REAL` column (additive migration)
+- `app/router/adaptive.py`: query Codex confidence before `select()` — high-confidence entries override task_type routing
+
+**Do not implement before Phase 3.** Foundation is already in the schema (confidence_score, occurrence_count, execution_logs telemetry).
+
+---
+
 ### No Own ChromaDB — Use SQLite FTS5 + Atlas — Decided 2026-02-27
 **Logged by:** claude
 **Severity:** 🔴 Must follow — matches ecosystem hard rule
