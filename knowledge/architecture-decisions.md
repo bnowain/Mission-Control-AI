@@ -2,6 +2,28 @@
 
 ---
 
+### Vector Store: SQLite + Ollama, Not ChromaDB — Decided 2026-02-28
+**Logged by:** claude
+**Severity:** 🔵 Reference
+**Context:** Phase 7 adds a full RAG layer (web ingest, artifact embedding, codebase indexing, pre-task injection). Needed to decide where embeddings live.
+
+**Decision:** SQLite `embeddings` table with serialized float32 vectors (numpy tobytes → BLOB). Cosine similarity computed in Python on query results. Embedding model: `nomic-embed-text` via Ollama (`POST localhost:11434/api/embeddings`).
+
+**Overrides Phase 0 note:** The original "No Own ChromaDB" note is still honored — we're not using ChromaDB. This is a lighter alternative that stays within the existing SQLite WAL infrastructure.
+
+**Rationale:**
+- Zero new infrastructure — no separate vector DB process to manage
+- Stays consistent with root CLAUDE.md Rule 1 (SQLite + WAL everywhere)
+- `nomic-embed-text` is already available on the local Ollama instance
+- Top-k search over a few thousand documents is fast enough in Python
+- If scale becomes an issue post-v1, migration to FAISS/ChromaDB is straightforward (same schema, swap retrieval layer)
+
+**Graceful degradation:** If Ollama is offline, `EmbeddingClient.embed()` returns `None`. RAGEngine skips injection silently. Execution proceeds without RAG — no failure.
+
+**Scaling threshold:** Cosine similarity scan over ~50k chunks is acceptable (< 100ms on CPU). Above that, add an HNSW index (SQLite extension) or migrate to FAISS. Track chunk count in `GET /rag/stats` and note in monitoring when count > 40k.
+
+---
+
 ### Warm/Cold VRAM Awareness + Codex Confidence Integration — Phase 3 Requirement — 2026-02-28
 **Logged by:** claude
 **Severity:** 🟡 Phase 3 — do not implement in Phase 1/2

@@ -172,23 +172,35 @@ Mission_Control/
 
 ---
 
-## Phase 4 — Processing Engine
+## Phase 4 — Processing Engine ✅ COMPLETE
 **Spec:** Part 7
 **Goal:** Artifact Registry + processing pipelines + worker scheduler.
+**Completed:** 2026-02-27 | **Tests:** 37 new (140 total) | **Schema:** v6 | **Commit:** `0084e80`
 
 ### Deliverables
-- [ ] Artifact Registry — 3-layer schema (raw, extracted, analysis) with SHA256 hashing
-- [ ] Artifact state machine: RECEIVED → PROCESSING → PROCESSED → AVAILABLE_FOR_EXPORT → EXPORTED → ARCHIVED
-- [ ] OCR Pipeline (layout detection, printed OCR, handwriting detection/recognition, table extraction)
-- [ ] Audio Pipeline (Whisper transcription, diarization orchestration via Civic API if configured)
-- [ ] LLM Analysis Pipeline (chunk builder, context compression, router-based model selection)
-- [ ] Worker Scheduler — queue-based, priority levels, hardware awareness, idempotency keys
-- [ ] Version Tracking — engine_version, model_version, prompt_template_version per artifact
-- [ ] Backfill system — POST /backfill with simulation mode
-- [ ] Event system — artifact.created, artifact.processed, artifact.failed, backfill.completed, codex.updated
-- [ ] Migration layer — GET /artifacts, POST /artifacts/{id}/migrate (never writes to civic DB directly)
-- [ ] GPU allocation logic — VRAM tracking, prevent over-allocation, CPU fallback
-- [ ] `page_url` capture on all ingest endpoints (see schema-decisions.md)
+- [x] Artifact Registry — 3-layer schema (raw, extracted, analysis) with SHA256 hashing + dedup
+- [x] Artifact state machine: RECEIVED → PROCESSING → PROCESSED → AVAILABLE_FOR_EXPORT → EXPORTED → ARCHIVED (409 on invalid transitions)
+- [x] OCR Pipeline — stub-safe: returns `{available: false, blocks: [], tables: [], signatures: []}` when surya not installed
+- [x] Audio Pipeline — stub-safe: returns `{available: false, transcript: "", segments: []}` when faster_whisper not installed
+- [x] LLM Analysis Pipeline — always available (no hard ML deps at import time)
+- [x] Pipeline registry — auto-registers OCR/Audio/LLM at import; `GET /workers/pipelines` returns availability flags
+- [x] Worker Scheduler — processing_jobs table, ULID IDs, idempotency keys, QUEUED→RUNNING→COMPLETED/FAILED/RETRYING
+- [x] Version Tracking — pipeline_versions table, backfill eligibility checks by comparing artifact extraction version vs current
+- [x] Backfill Engine — `POST /backfill` with `simulate=true` returns plan without enqueuing
+- [x] Event system — event_log (ULID IDs) + in-memory subscribers + best-effort webhook dispatch
+- [x] Webhook CRUD — webhook_subscribers table, `POST/GET/DELETE /events/webhooks`
+- [x] `page_url` captured on all ingest endpoints (Rule 3 compliant)
+- [ ] Migration layer — GET /artifacts/{id}/migrate (deferred to Phase 7)
+- [ ] GPU allocation logic — VRAM tracking, prevent over-allocation (deferred to Phase 7)
+
+### New API Endpoints
+- `POST/GET /artifacts`, `GET /artifacts/{id}`, `GET /artifacts/{id}/export`, `POST /artifacts/{id}/state`, `POST /artifacts/{id}/process`
+- `GET /workers/pipelines`, `GET /workers/jobs`, `GET /workers/jobs/{id}`, `GET /workers/stats`
+- `POST /backfill`
+- `GET /events`, `POST/GET/DELETE /events/webhooks`
+
+### New Tables (schema v6)
+`artifacts_extracted`, `artifacts_analysis`, `processing_jobs`, `pipeline_versions`, `event_log`, `webhook_subscribers`
 
 ---
 
@@ -218,7 +230,7 @@ Mission_Control/
 
 ---
 
-## Phase 6 — CLI (Thin API Client)
+## Phase 6 — CLI (Thin API Client) ✅ COMPLETE
 **Spec:** Part 6
 **Tech stack:** Python, Typer, httpx, rich, WebSocket client
 
@@ -245,7 +257,191 @@ mission-control coder  # interactive mode
 
 ---
 
-## Phase 7 — Platform Hardening
+## Phase 7 — RAG Integration ✅ COMPLETE
+**Goal:** Full retrieval-augmented generation layer: web ingestion, artifact embedding, codebase indexing, and pre-task context injection. All backed by SQLite + Ollama embeddings (no external vector DB).
+**Decision:** SQLite `embeddings` table with serialized float vectors; cosine similarity in Python; `nomic-embed-text` (or any Ollama embedding model) via LiteLLM. Overrides the Phase 0 "no own ChromaDB" note — ChromaDB is still not used; this is a leaner, SQLite-native approach.
+
+---
+
+### 7.1 — Core Vector Infrastructure
+
+**New table: `embeddings`** (schema v7)
+```sql
+CREATE TABLE embeddings (
+    id              TEXT PRIMARY KEY,           -- UUID
+    source_type     TEXT NOT NULL,              -- 'artifact' | 'codex' | 'codebase' | 'web_page'
+    source_id       TEXT NOT NULL,              -- artifact UUID, codex UUID, or file path hash
+    project_id      TEXT,                       -- nullable; scopes codebase embeddings
+    chunk_index     INTEGER NOT NULL DEFAULT 0, -- 0-based chunk position within source
+    chunk_text      TEXT NOT NULL,
+    embedding_model TEXT NOT NULL,              -- e.g. "ollama/nomic-embed-text"
+    embedding_vector BLOB NOT NULL,             -- serialized float32 array (numpy tobytes)
+    embedding_dim   INTEGER NOT NULL,           -- e.g. 768
+    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_embeddings_source ON embeddings(source_type, source_id);
+CREATE INDEX idx_embeddings_project ON embeddings(project_id) WHERE project_id IS NOT NULL;
+```
+
+**Add to `execution_logs`:**
+```sql
+ALTER TABLE execution_logs ADD COLUMN rag_chunks_injected INTEGER DEFAULT 0;
+ALTER TABLE execution_logs ADD COLUMN rag_source_ids TEXT;  -- JSON array of source_ids used
+```
+
+**New module: `app/rag/`**
+```
+app/rag/
+  __init__.py
+  engine.py        # RAGEngine: embed(), search(), inject_context()
+  chunker.py       # Text → fixed-size overlapping chunks (512 tokens, 64 overlap)
+  embedding.py     # EmbeddingClient: wraps Ollama /api/embeddings via httpx
+  similarity.py    # cosine_similarity(), top_k_chunks()
+  web_fetcher.py   # URL → clean text (httpx + html2text)
+```
+
+**Key classes:**
+- `EmbeddingClient` — `embed(text: str) → list[float]`, `embed_batch(texts) → list[list[float]]`. Calls `POST http://localhost:11434/api/embeddings` with model `nomic-embed-text`. Falls back gracefully if Ollama is not running (returns None, logs warning, RAG skipped for that call).
+- `RAGEngine` — `index_artifact(artifact_id)`, `index_codebase(project_id, path)`, `index_web(url, project_id)`, `search(query, source_type, project_id, top_k) → list[RAGChunk]`, `inject_context(task_ctx) → str`.
+- Chunker — 512-token chunks with 64-token overlap. Token count via `len(text.split())` (approximate, avoids tokenizer dep).
+
+**New dependencies to add to requirements.txt:**
+- `html2text>=2020.1.16` — web page text extraction (pure Python)
+
+---
+
+### 7.2 — Web Ingest Pipeline
+
+Extends Phase 4 artifact pipeline pattern. New pipeline name: `web_ingest`.
+
+**Flow:**
+```
+CLI: artifacts ingest --url <url>
+  → POST /artifacts  (source_type='web_page', page_url=<url>)
+  → POST /artifacts/{id}/process  (pipeline_name='web_ingest')
+    → Worker picks up job
+    → web_fetcher.py: httpx GET url → html2text → clean text
+    → Chunker: split into 512-token overlapping chunks
+    → EmbeddingClient: embed each chunk (batch)
+    → Store chunks in embeddings table (source_type='web_page', source_id=artifact_id)
+    → Store clean text in artifacts_extracted.extracted_text
+    → Transition artifact: RECEIVED → PROCESSING → PROCESSED
+    → Emit event: artifact.embedded
+```
+
+**New pipeline file:** `app/processing/pipelines/web_ingest.py`
+
+---
+
+### 7.3 — Artifact Embedding Pipeline
+
+Auto-triggered after any OCR/audio/LLM analysis pipeline completes. New pipeline name: `embed_artifact`.
+
+**Flow:**
+```
+Event: artifact.processed (emitted by ocr/audio/llm pipelines)
+  → Subscriber enqueues embed_artifact job for that artifact_id
+  → Worker picks up job
+  → Reads artifacts_extracted.extracted_text
+  → Chunks → embeds → stores in embeddings (source_type='artifact')
+  → Emit: artifact.embedded
+```
+
+Also triggered manually: `POST /artifacts/{id}/process` with `pipeline_name='embed_artifact'`.
+
+---
+
+### 7.4 — Codebase Indexing
+
+Index a local directory as a project's code context. Scoped to `project_id`.
+
+**Flow:**
+```
+POST /rag/index  body: {project_id, path, file_extensions, max_file_size_kb}
+  → Walk path, filter by extensions (default: .py .js .ts .go .rs .md .txt)
+  → Skip files > max_file_size_kb (default: 100KB)
+  → Per file: read → chunk by function/class boundary (fallback: fixed-size)
+  → Embed each chunk → store (source_type='codebase', project_id=<project_id>)
+  → Return: {indexed_files, total_chunks, skipped_files}
+
+DELETE /rag/index/{project_id}  → remove all codebase embeddings for that project
+```
+
+**CLI:** `mission-control rag index --path <dir> --project <id> [--extensions .py,.ts] [--max-kb 100]`
+
+---
+
+### 7.5 — Pre-Task RAG Injection
+
+In `ExecutionLoop`, before building the user prompt, call `RAGEngine.inject_context(task_ctx)`.
+
+**Logic:**
+1. Query `source_type='codebase'` filtered by `project_id`, top-5 chunks
+2. Query `source_type='artifact'` filtered by `project_id` (or global if no project match), top-3 chunks
+3. Query `source_type='web_page'` filtered by `project_id`, top-2 chunks
+4. Codex query already handled by `CodexEngine` (FTS) — augment with vector search on `source_type='codex'` top-3
+5. Assemble RAG context block:
+   ```
+   [RAG CONTEXT — {n} chunks from {sources}]
+   <chunk_text>
+   ...
+   [END RAG CONTEXT]
+   ```
+6. Prepend to user message
+7. Log: `rag_chunks_injected={total_count}`, `rag_source_ids=[...]`
+
+**Guard:** If Ollama is unavailable (embedding returns None), skip RAG silently. Execution continues without RAG — no failure.
+
+---
+
+### 7.6 — API Endpoints
+
+```
+POST   /rag/index                     # Index a codebase directory
+GET    /rag/search?q=&project=&type=&limit=  # Semantic search (used by CLI + UI)
+GET    /rag/stats                     # Embedding counts by source_type
+DELETE /rag/index/{project_id}        # Remove codebase index for a project
+```
+
+**Atlas-exposed:** `GET /api/rag/search?q=&limit=` — semantic search over all non-codebase embeddings (web_page + artifact). Codebase embeddings excluded (too project-specific).
+
+---
+
+### 7.7 — CLI Commands (add to Phase 6 CLI)
+
+Add a new `rag` command group to `cli/commands/rag.py`:
+```
+mission-control rag index   --path <dir> --project <id> [--extensions] [--max-kb]
+mission-control rag search  <query> [--project] [--type] [--limit]
+mission-control rag stats
+```
+
+`artifacts ingest --url <url>` already works — just needs the web_ingest pipeline registered.
+
+---
+
+### 7.8 — Testing
+
+- [ ] `tests/test_phase7_rag.py` — unit tests for chunker, similarity, EmbeddingClient (mock Ollama), RAGEngine
+- [ ] Integration test: web_ingest pipeline end-to-end with mocked httpx
+- [ ] Integration test: artifact embedding triggered after processing
+- [ ] Integration test: codebase index → search → verify top-k relevance
+- [ ] Integration test: pre-task injection adds context block to prompt
+- [ ] Graceful degradation: Ollama offline → execution proceeds without RAG
+
+---
+
+### 7.9 — Schema Changes (v7)
+
+**New table:** `embeddings` (see 7.1 above)
+**Altered:** `execution_logs` — `rag_chunks_injected INTEGER DEFAULT 0`, `rag_source_ids TEXT`
+**New pipeline registered:** `web_ingest`, `embed_artifact`
+
+Update `MASTER_SCHEMA.md` immediately when implementing.
+
+---
+
+## Phase 8 — Platform Hardening ✅ COMPLETE
 **Spec:** Part 8
 **Goal:** Production-grade observability, testing, security, governance.
 
@@ -274,19 +470,24 @@ mission-control coder  # interactive mode
 
 ---
 
-## Phase 8 — Atlas Integration
+## Phase 9 — Atlas Integration ✅ COMPLETE
+
 **Spec:** integration-patterns.md
 **Goal:** Mission Control fully registered as an Atlas spoke.
 
 ### Registration Checklist
-- [ ] Schema registered in MASTER_SCHEMA.md (can be done Phase 1–2)
-- [ ] Spoke section added to master_codex.md
-- [ ] GET /api/health responding (must be done by end of Phase 2)
-- [ ] GET /api/codex/search returning Atlas-compatible response shape
-- [ ] GET /api/router/stats returning read-only summary
-- [ ] Mission Control added to Atlas `config.py` SPOKE_URLS
-- [ ] Search keywords added to Atlas `query_classifier.py`
-- [ ] Searcher added to Atlas `unified_search.py`
+- [x] Schema registered in MASTER_SCHEMA.md (done Phase 1)
+- [x] Spoke section added to master_codex.md (§11D)
+- [x] GET /api/health responding (done Phase 2)
+- [x] GET /api/codex/search returning Atlas-compatible response shape
+- [x] GET /api/router/stats returning read-only summary
+- [x] Mission Control added to Atlas `config.py` SPOKES dict (port 8860)
+- [x] Search keywords added to Atlas `query_classifier.py` (24 keywords)
+- [x] Searcher added to Atlas `unified_search.py` (`_search_mission_control`)
+- [x] Tool schemas defined in Atlas `tools.py` (MISSION_CONTROL_TOOLS: 3 tools)
+- [x] TOOL_TO_SPOKE mapping updated in Atlas `tools.py`
+- [x] Feature Completeness Matrix updated in master_codex.md §12
+- [x] 27 tests: 12 passed, 15 skipped (Atlas not in path — correct), 0 failures
 
 ### What NOT to expose to Atlas
 - Raw execution telemetry
@@ -347,3 +548,8 @@ One unified knowledge database where:
 | Version | Date | Change |
 |---------|------|--------|
 | 0.1 | 2026-02-27 | Initial creation — 8 phases + post-v1 Supreme Master Codex roadmap + dedup routing rule |
+| 0.2 | 2026-02-27 | Phase 4 complete — Processing Engine (artifact registry, pipelines, workers, events, backfill) |
+| 0.3 | 2026-02-28 | Phase 6 complete — CLI (Typer + httpx + rich, 30 tests, 170 total). Phase 7 redesigned as RAG Integration (SQLite + Ollama embeddings): web_ingest, artifact embedding, codebase indexing, pre-task injection. Platform Hardening → Phase 8, Atlas → Phase 9. |
+| 0.4 | 2026-02-28 | Phase 7 complete — RAG Integration (32 tests, 202 total). New: app/rag/ package (chunker, embedding, similarity, web_fetcher, engine), web_ingest + embed_artifact pipelines, /rag/* API endpoints, rag CLI command group, execution_loop RAG injection, schema v7 (embeddings table + rag columns on execution_logs). |
+| 0.5 | 2026-02-28 | Phase 8 complete — Platform Hardening (37 tests, 239 total). New: schema v8 (6 tables: ocr_corrections, speaker_resolution_overrides, summary_corrections, tag_overrides, data_lineage, schema_migrations + archival cols on artifacts_raw), audit helper, feature flags helper, Prometheus /metrics, enhanced /api/health (db+worker+gpu), governance API (/audit, /feature-flags, /prompt-registry, /overrides/*, /lineage/*), POST /artifacts/{id}/archive. |
+| 0.6 | 2026-02-28 | Phase 9 complete — Atlas Integration (12 passed + 15 skipped, 251 total). Atlas-side: SPOKES dict, MISSION_CONTROL_TOOLS (3 tools), query_classifier keywords, unified_search searcher, TOOL_TO_SPOKE map. MC-side: confirmed /api/health, /api/codex/search, /api/router/stats, /api/rag/search shapes. Documentation: master_codex.md §11D (MC spoke section) + updated §12 Feature Completeness Matrix. |

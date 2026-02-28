@@ -35,6 +35,7 @@ from app.processing.registry import (
     transition_artifact,
 )
 from app.processing.worker import enqueue_job
+from app.core.audit import ACTION_ARTIFACT_ARCHIVED, write_audit_log
 
 router = APIRouter(prefix="/artifacts", tags=["artifacts"])
 
@@ -162,3 +163,54 @@ async def process_artifact(artifact_id: str, req: ProcessArtifactRequest):
         payload=req.payload,
     )
     return {"job_id": job["id"], "job_status": job["job_status"]}
+
+
+# ── POST /artifacts/{id}/archive ──────────────────────────────────────────────
+
+def _archive_artifact(artifact_id: str) -> dict:
+    """Mark an artifact as cold storage. Transitions state to ARCHIVED."""
+    from datetime import datetime, timezone
+    from app.database.init import get_connection
+    from app.processing.registry import ArtifactNotFoundError
+
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT id, processing_state FROM artifacts_raw WHERE id = ?",
+            (artifact_id,),
+        ).fetchone()
+        if not row:
+            raise ArtifactNotFoundError(artifact_id)
+
+        archived_at = datetime.now(timezone.utc).isoformat()
+        conn.execute(
+            """
+            UPDATE artifacts_raw
+            SET is_cold_storage = 1, archived_at = ?, processing_state = 'ARCHIVED'
+            WHERE id = ?
+            """,
+            (archived_at, artifact_id),
+        )
+        conn.commit()
+        return {"artifact_id": artifact_id, "archived": True, "archived_at": archived_at}
+    finally:
+        conn.close()
+
+
+@router.post("/{artifact_id}/archive", status_code=200)
+async def archive_artifact(artifact_id: str):
+    """
+    Move an artifact to cold storage.
+    Sets is_cold_storage=1, archived_at=now, processing_state=ARCHIVED.
+    """
+    try:
+        result = await run_in_thread(_archive_artifact, artifact_id)
+    except ArtifactNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+    write_audit_log(
+        ACTION_ARTIFACT_ARCHIVED,
+        artifact_id=artifact_id,
+        metadata={"archived_at": result["archived_at"]},
+    )
+    return result

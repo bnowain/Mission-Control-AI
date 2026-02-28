@@ -67,6 +67,9 @@ class ExecutionContext:
     prompt_id:           Optional[str] = None
     prompt_version:      Optional[str] = None
     injected_chunk_hashes: list[str] = field(default_factory=list)
+    # Phase 7 RAG telemetry (populated by _inject_rag_context)
+    rag_chunks_injected: int = 0
+    rag_source_ids: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -120,7 +123,8 @@ class ExecutionLoop:
         retry_count    = 0
         loop_count     = 0
         last_exc: Optional[Exception] = None
-        messages       = self._inject_codex_guidelines(ctx)
+        messages       = self._inject_rag_context(ctx)
+        messages       = self._inject_codex_guidelines_into(ctx, messages)
 
         while loop_count < MAX_EXECUTION_LOOPS:
             loop_count += 1
@@ -205,6 +209,8 @@ class ExecutionLoop:
                 prompt_id=ctx.prompt_id,
                 prompt_version=ctx.prompt_version,
                 injected_chunk_hashes=ctx.injected_chunk_hashes or None,
+                rag_chunks_injected=ctx.rag_chunks_injected,
+                rag_source_ids=ctx.rag_source_ids or None,
             )
 
             # ── Step 5: Check pass/fail ───────────────────────────────
@@ -269,18 +275,41 @@ class ExecutionLoop:
     # Helpers
     # ------------------------------------------------------------------
 
-    def _inject_codex_guidelines(self, ctx: ExecutionContext) -> list[dict]:
+    def _inject_rag_context(self, ctx: ExecutionContext) -> list[dict]:
+        """
+        Phase 7: Query RAG embeddings and prepend a context block.
+        Degrades silently if Ollama is unavailable.
+        Returns the (potentially augmented) message list.
+        """
+        try:
+            from app.rag.engine import get_rag_engine
+            engine = get_rag_engine()
+            augmented, count, source_ids = engine.inject_context(
+                task_id=ctx.task_id,
+                project_id=ctx.project_id,
+                messages=ctx.messages,
+            )
+            ctx.rag_chunks_injected = count
+            ctx.rag_source_ids = source_ids
+            return augmented
+        except Exception as exc:
+            log.warning("RAG injection failed — continuing without RAG", exc=str(exc))
+            return ctx.messages
+
+    def _inject_codex_guidelines_into(
+        self, ctx: ExecutionContext, messages: list[dict]
+    ) -> list[dict]:
         """
         Query Codex for relevant prevention guidelines and prepend
         them as a system message if any are found.
-        Returns the (potentially augmented) message list.
+        Operates on the provided messages (which may already have RAG context).
         """
         if not ctx.signature:
-            return ctx.messages
+            return messages
 
         guidelines = query_codex(ctx.signature, project_id=ctx.project_id)
         if not guidelines:
-            return ctx.messages
+            return messages
 
         lines = ["Relevant lessons from the Codex (apply these to avoid known failure patterns):"]
         for g in guidelines:
@@ -289,8 +318,8 @@ class ExecutionLoop:
         codex_msg = {"role": "system", "content": "\n".join(lines)}
 
         # Prepend after any existing system messages, before user message
-        system_msgs = [m for m in ctx.messages if m.get("role") == "system"]
-        other_msgs  = [m for m in ctx.messages if m.get("role") != "system"]
+        system_msgs = [m for m in messages if m.get("role") == "system"]
+        other_msgs  = [m for m in messages if m.get("role") != "system"]
         augmented   = system_msgs + [codex_msg] + other_msgs
 
         log.info(

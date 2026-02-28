@@ -74,6 +74,8 @@ class TelemetryLogger:
         prompt_id: Optional[str] = None,
         prompt_version: Optional[str] = None,
         injected_chunk_hashes: Optional[list[str]] = None,
+        rag_chunks_injected: int = 0,
+        rag_source_ids: Optional[list[str]] = None,
     ) -> str:
         """
         Write a telemetry record. Returns the new execution_log id (ULID).
@@ -94,6 +96,7 @@ class TelemetryLogger:
                     human_intervention, downstream_impact,
                     duration_ms, routing_reason, stack_trace_hash,
                     prompt_id, prompt_version, injected_chunk_hashes,
+                    rag_chunks_injected, rag_source_ids,
                     created_at
                 ) VALUES (
                     ?, ?, ?, ?,
@@ -104,6 +107,7 @@ class TelemetryLogger:
                     ?, ?,
                     ?, ?, ?,
                     ?, ?, ?,
+                    ?, ?,
                     ?
                 )
                 """,
@@ -133,6 +137,8 @@ class TelemetryLogger:
                     prompt_id,
                     prompt_version,
                     json.dumps(injected_chunk_hashes) if injected_chunk_hashes else None,
+                    rag_chunks_injected,
+                    json.dumps(rag_source_ids) if rag_source_ids else None,
                     datetime.now(timezone.utc).isoformat(),
                 ),
             )

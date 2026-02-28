@@ -23,7 +23,7 @@ DB_PATH = Path(__file__).resolve().parents[2] / "database" / "mission_control.db
 # ---------------------------------------------------------------------------
 # Schema version — bump when making additive changes
 # ---------------------------------------------------------------------------
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 8
 
 # ---------------------------------------------------------------------------
 # DDL
@@ -170,6 +170,10 @@ CREATE TABLE IF NOT EXISTS execution_logs (
     prompt_id             TEXT,                     -- FK → prompt_registry
     prompt_version        TEXT,                     -- snapshot of version string
     injected_chunk_hashes TEXT,                     -- JSON array of chunk SHA256s
+
+    -- Phase 7 RAG telemetry
+    rag_chunks_injected   INTEGER DEFAULT 0,        -- count of RAG chunks prepended
+    rag_source_ids        TEXT,                     -- JSON array of source IDs
 
     created_at            DATETIME DEFAULT CURRENT_TIMESTAMP,
 
@@ -423,6 +427,8 @@ CREATE TABLE IF NOT EXISTS artifacts_raw (
     mime_type        TEXT,
     page_url         TEXT,                          -- nullable — human-browsable source URL
                                                     -- MUST be set for any external ingest (Rule 3)
+    is_cold_storage  INTEGER DEFAULT 0,             -- Phase 8: 1 = archived to cold storage
+    archived_at      DATETIME,                      -- Phase 8: when artifact was archived
     ingest_at        DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -753,6 +759,129 @@ CREATE TABLE IF NOT EXISTS webhook_subscribers (
     created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
+
+-- =========================================================
+-- EMBEDDINGS (Phase 7 — RAG)
+-- SQLite-native vector store. No external vector DB.
+-- See: architecture-decisions.md → Vector Store: SQLite + Ollama
+-- =========================================================
+
+CREATE TABLE IF NOT EXISTS embeddings (
+    id               TEXT PRIMARY KEY,              -- UUID
+    source_type      TEXT NOT NULL,                 -- 'artifact' | 'codex' | 'codebase' | 'web_page'
+    source_id        TEXT NOT NULL,                 -- artifact UUID, codex UUID, or relative file path
+    project_id       TEXT,                          -- nullable; scopes codebase embeddings
+    chunk_index      INTEGER NOT NULL DEFAULT 0,    -- 0-based chunk position within source
+    chunk_text       TEXT NOT NULL,
+    embedding_model  TEXT NOT NULL,                 -- e.g. "nomic-embed-text"
+    embedding_vector BLOB NOT NULL,                 -- struct.pack float32 array
+    embedding_dim    INTEGER NOT NULL,              -- e.g. 768 for nomic-embed-text
+    created_at       DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_embeddings_source  ON embeddings(source_type, source_id);
+CREATE INDEX IF NOT EXISTS idx_embeddings_project ON embeddings(project_id)
+    WHERE project_id IS NOT NULL;
+
+
+-- =========================================================
+-- HUMAN OVERRIDE LAYER (Phase 8)
+-- Overrides NEVER alter the raw artifact. Append-only per artifact.
+-- =========================================================
+
+CREATE TABLE IF NOT EXISTS ocr_corrections (
+    id               TEXT PRIMARY KEY,              -- ULID
+    artifact_id      TEXT NOT NULL,
+    original_value   TEXT,
+    corrected_value  TEXT,
+    corrected_by     TEXT,
+    timestamp        DATETIME DEFAULT CURRENT_TIMESTAMP,
+    artifact_version INTEGER,
+    reason           TEXT,
+    FOREIGN KEY (artifact_id) REFERENCES artifacts_raw(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_ocr_corrections_artifact ON ocr_corrections(artifact_id);
+
+
+CREATE TABLE IF NOT EXISTS speaker_resolution_overrides (
+    id               TEXT PRIMARY KEY,              -- ULID
+    artifact_id      TEXT NOT NULL,
+    segment_index    INTEGER,
+    original_speaker TEXT,
+    corrected_speaker TEXT,
+    corrected_by     TEXT,
+    timestamp        DATETIME DEFAULT CURRENT_TIMESTAMP,
+    reason           TEXT,
+    FOREIGN KEY (artifact_id) REFERENCES artifacts_raw(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_speaker_overrides_artifact ON speaker_resolution_overrides(artifact_id);
+
+
+CREATE TABLE IF NOT EXISTS summary_corrections (
+    id               TEXT PRIMARY KEY,              -- ULID
+    artifact_id      TEXT NOT NULL,
+    original_summary TEXT,
+    corrected_summary TEXT,
+    corrected_by     TEXT,
+    timestamp        DATETIME DEFAULT CURRENT_TIMESTAMP,
+    reason           TEXT,
+    FOREIGN KEY (artifact_id) REFERENCES artifacts_raw(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_summary_corrections_artifact ON summary_corrections(artifact_id);
+
+
+CREATE TABLE IF NOT EXISTS tag_overrides (
+    id             TEXT PRIMARY KEY,                -- ULID
+    artifact_id    TEXT NOT NULL,
+    original_tags  TEXT,                            -- JSON array
+    corrected_tags TEXT,                            -- JSON array
+    corrected_by   TEXT,
+    timestamp      DATETIME DEFAULT CURRENT_TIMESTAMP,
+    reason         TEXT,
+    FOREIGN KEY (artifact_id) REFERENCES artifacts_raw(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_tag_overrides_artifact ON tag_overrides(artifact_id);
+
+
+-- =========================================================
+-- DATA LINEAGE (Phase 8)
+-- Artifact transformation graph: Raw → OCR → Chunk → Summary → Migration
+-- =========================================================
+
+CREATE TABLE IF NOT EXISTS data_lineage (
+    id                        TEXT PRIMARY KEY,     -- ULID
+    artifact_id               TEXT NOT NULL,
+    derived_from_artifact_id  TEXT,
+    pipeline_stage            TEXT,                 -- ocr | audio | chunk | summary | migration | embed
+    model_version             TEXT,
+    timestamp                 DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (artifact_id)              REFERENCES artifacts_raw(id),
+    FOREIGN KEY (derived_from_artifact_id) REFERENCES artifacts_raw(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_lineage_artifact ON data_lineage(artifact_id);
+CREATE INDEX IF NOT EXISTS idx_lineage_derived   ON data_lineage(derived_from_artifact_id)
+    WHERE derived_from_artifact_id IS NOT NULL;
+
+
+-- =========================================================
+-- SCHEMA MIGRATIONS LOG (Phase 8)
+-- Tracks applied migrations for schema evolution management.
+-- =========================================================
+
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    id             TEXT PRIMARY KEY,                -- ULID
+    version_from   INTEGER NOT NULL,
+    version_to     INTEGER NOT NULL,
+    migration_type TEXT NOT NULL DEFAULT 'additive',  -- additive | breaking | backcompat
+    applied_at     DATETIME DEFAULT CURRENT_TIMESTAMP,
+    migration_success INTEGER NOT NULL DEFAULT 1
+);
+
 """
 
 
@@ -890,7 +1019,7 @@ def run_migrations(db_path: Path = DB_PATH) -> None:
 
         # v5 → v6: add Phase 4 tables (CREATE TABLE IF NOT EXISTS is idempotent)
         if current < 6:
-            conn.executescript("""
+            conn.executescript(r"""
             CREATE TABLE IF NOT EXISTS artifacts_extracted (
                 id               TEXT PRIMARY KEY,
                 artifact_id      TEXT NOT NULL,
@@ -977,6 +1106,105 @@ def run_migrations(db_path: Path = DB_PATH) -> None:
             """)
             conn.execute("INSERT INTO schema_version (version) VALUES (6)")
             logger.info("Migration v5→v6 applied: Phase 4 tables created")
+
+        # v6 → v7: add Phase 7 RAG tables + execution_logs columns
+        if current < 7:
+            conn.executescript("""
+            CREATE TABLE IF NOT EXISTS embeddings (
+                id               TEXT PRIMARY KEY,
+                source_type      TEXT NOT NULL,
+                source_id        TEXT NOT NULL,
+                project_id       TEXT,
+                chunk_index      INTEGER NOT NULL DEFAULT 0,
+                chunk_text       TEXT NOT NULL,
+                embedding_model  TEXT NOT NULL,
+                embedding_vector BLOB NOT NULL,
+                embedding_dim    INTEGER NOT NULL,
+                created_at       DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_embeddings_source
+                ON embeddings(source_type, source_id);
+            """)
+            # Additive columns on execution_logs — ignore if already present
+            for col_sql in (
+                "ALTER TABLE execution_logs ADD COLUMN rag_chunks_injected INTEGER DEFAULT 0",
+                "ALTER TABLE execution_logs ADD COLUMN rag_source_ids TEXT",
+            ):
+                try:
+                    conn.execute(col_sql)
+                except Exception as e:
+                    logger.debug("Migration v6→v7 column skipped: %s", e)
+            conn.execute("INSERT INTO schema_version (version) VALUES (7)")
+            logger.info("Migration v6→v7 applied: embeddings table + rag columns on execution_logs")
+
+        # v7 → v8: Phase 8 — human override tables, data lineage, schema_migrations,
+        #           archival columns on artifacts_raw
+        if current < 8:
+            conn.executescript("""
+            CREATE TABLE IF NOT EXISTS ocr_corrections (
+                id TEXT PRIMARY KEY, artifact_id TEXT NOT NULL,
+                original_value TEXT, corrected_value TEXT, corrected_by TEXT,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                artifact_version INTEGER, reason TEXT,
+                FOREIGN KEY (artifact_id) REFERENCES artifacts_raw(id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_ocr_corrections_artifact
+                ON ocr_corrections(artifact_id);
+
+            CREATE TABLE IF NOT EXISTS speaker_resolution_overrides (
+                id TEXT PRIMARY KEY, artifact_id TEXT NOT NULL,
+                segment_index INTEGER, original_speaker TEXT, corrected_speaker TEXT,
+                corrected_by TEXT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP, reason TEXT,
+                FOREIGN KEY (artifact_id) REFERENCES artifacts_raw(id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_speaker_overrides_artifact
+                ON speaker_resolution_overrides(artifact_id);
+
+            CREATE TABLE IF NOT EXISTS summary_corrections (
+                id TEXT PRIMARY KEY, artifact_id TEXT NOT NULL,
+                original_summary TEXT, corrected_summary TEXT, corrected_by TEXT,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP, reason TEXT,
+                FOREIGN KEY (artifact_id) REFERENCES artifacts_raw(id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_summary_corrections_artifact
+                ON summary_corrections(artifact_id);
+
+            CREATE TABLE IF NOT EXISTS tag_overrides (
+                id TEXT PRIMARY KEY, artifact_id TEXT NOT NULL,
+                original_tags TEXT, corrected_tags TEXT, corrected_by TEXT,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP, reason TEXT,
+                FOREIGN KEY (artifact_id) REFERENCES artifacts_raw(id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_tag_overrides_artifact
+                ON tag_overrides(artifact_id);
+
+            CREATE TABLE IF NOT EXISTS data_lineage (
+                id TEXT PRIMARY KEY, artifact_id TEXT NOT NULL,
+                derived_from_artifact_id TEXT, pipeline_stage TEXT,
+                model_version TEXT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (artifact_id) REFERENCES artifacts_raw(id),
+                FOREIGN KEY (derived_from_artifact_id) REFERENCES artifacts_raw(id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_lineage_artifact ON data_lineage(artifact_id);
+
+            CREATE TABLE IF NOT EXISTS schema_migrations (
+                id TEXT PRIMARY KEY, version_from INTEGER NOT NULL,
+                version_to INTEGER NOT NULL,
+                migration_type TEXT NOT NULL DEFAULT 'additive',
+                applied_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                migration_success INTEGER NOT NULL DEFAULT 1
+            );
+            """)
+            for col_sql in (
+                "ALTER TABLE artifacts_raw ADD COLUMN is_cold_storage INTEGER DEFAULT 0",
+                "ALTER TABLE artifacts_raw ADD COLUMN archived_at DATETIME",
+            ):
+                try:
+                    conn.execute(col_sql)
+                except Exception as e:
+                    logger.debug("Migration v7→v8 column skipped: %s", e)
+            conn.execute("INSERT INTO schema_version (version) VALUES (8)")
+            logger.info("Migration v7→v8 applied: Phase 8 tables + archival columns")
 
         conn.commit()
     finally:

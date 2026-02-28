@@ -30,6 +30,9 @@ from app.api.artifacts import router as artifacts_router
 from app.api.workers import router as workers_router
 from app.api.backfill import router as backfill_router
 from app.api.events_api import router as events_router
+from app.api.rag import router as rag_router
+from app.api.metrics import router as metrics_router
+from app.api.governance import router as governance_router
 from app.core.exceptions import MissionControlError
 from app.core.logging import configure_logging, get_logger
 from app.database.init import DB_PATH, init_db, run_migrations
@@ -135,6 +138,9 @@ app.include_router(artifacts_router)       # POST/GET /artifacts/*
 app.include_router(workers_router)         # GET /workers/*
 app.include_router(backfill_router)        # POST /backfill
 app.include_router(events_router)          # GET/POST /events/*
+app.include_router(rag_router)             # POST/GET/DELETE /rag/*, GET /api/rag/search
+app.include_router(metrics_router)         # GET /metrics
+app.include_router(governance_router)      # GET /audit, /feature-flags, /prompt-registry, /overrides/*, /lineage/*
 
 
 if __name__ == "__main__":

@@ -25,6 +25,9 @@ rich>=13.0.0
 # torch is already installed system-wide; listed here for documentation
 # pip install torch  (version depends on CUDA version — install separately)
 
+# ── RAG (Phase 7) ────────────────────────────────────────────────────────────
+html2text>=2020.1.16  # web page HTML → plain text (pure Python, no binary deps)
+
 # ── Testing ─────────────────────────────────────────────────────────────────
 pytest>=7.0.0
 pytest-asyncio>=0.21.0
