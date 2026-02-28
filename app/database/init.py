@@ -23,7 +23,7 @@ DB_PATH = Path(__file__).resolve().parents[2] / "database" / "mission_control.db
 # ---------------------------------------------------------------------------
 # Schema version — bump when making additive changes
 # ---------------------------------------------------------------------------
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 6
 
 # ---------------------------------------------------------------------------
 # DDL
@@ -488,6 +488,271 @@ INSERT OR IGNORE INTO feature_flags (flag_name, enabled) VALUES
     ('handwriting_v2',        0),
     ('diarization_v3',        0);
 
+
+-- =========================================================
+-- PLAN DAG (Phase 3)
+-- plans → plan_phases → plan_steps (dependency graph)
+-- =========================================================
+
+CREATE TABLE IF NOT EXISTS plans (
+    id               TEXT PRIMARY KEY,          -- ULID
+    project_id       TEXT NOT NULL,
+    plan_title       TEXT NOT NULL,
+    plan_status      TEXT NOT NULL DEFAULT 'pending',
+                                                -- pending | running | completed | failed | replanning
+    plan_version     INTEGER DEFAULT 1,
+    plan_diff_history TEXT DEFAULT '[]',        -- JSON array of {version, diff, changed_at}
+    created_at       DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at       DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (project_id) REFERENCES projects(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_plans_project ON plans(project_id);
+CREATE INDEX IF NOT EXISTS idx_plans_status  ON plans(plan_status);
+
+
+CREATE TABLE IF NOT EXISTS plan_phases (
+    id           TEXT PRIMARY KEY,              -- ULID
+    plan_id      TEXT NOT NULL,
+    phase_index  INTEGER NOT NULL,
+    phase_title  TEXT NOT NULL,
+    phase_status TEXT NOT NULL DEFAULT 'pending',
+                                                -- pending | running | completed | failed
+    created_at   DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (plan_id) REFERENCES plans(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_phases_plan ON plan_phases(plan_id);
+
+
+CREATE TABLE IF NOT EXISTS plan_steps (
+    id             TEXT PRIMARY KEY,            -- ULID
+    phase_id       TEXT NOT NULL,
+    plan_id        TEXT NOT NULL,
+    step_index     INTEGER NOT NULL,
+    step_title     TEXT NOT NULL,
+    step_type      TEXT NOT NULL DEFAULT 'generic',
+    step_status    TEXT NOT NULL DEFAULT 'pending',
+                                                -- pending | running | completed | failed | skipped
+    step_prompt    TEXT,                        -- task prompt for this step
+    depends_on     TEXT NOT NULL DEFAULT '[]',  -- JSON array of step_ids
+    task_id        TEXT,                        -- nullable: linked when step executes
+    result_summary TEXT,                        -- brief result for diff history
+    created_at     DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at     DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (phase_id) REFERENCES plan_phases(id),
+    FOREIGN KEY (plan_id)  REFERENCES plans(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_steps_phase  ON plan_steps(phase_id);
+CREATE INDEX IF NOT EXISTS idx_steps_plan   ON plan_steps(plan_id);
+CREATE INDEX IF NOT EXISTS idx_steps_status ON plan_steps(step_status);
+
+
+-- =========================================================
+-- EXECUTION CHECKPOINTS (LangGraph CheckpointTuple pattern — native)
+-- thread_id = plan execution session
+-- =========================================================
+
+CREATE TABLE IF NOT EXISTS execution_checkpoints (
+    id              TEXT PRIMARY KEY,           -- ULID
+    thread_id       TEXT NOT NULL,              -- plan_id (session identifier)
+    checkpoint_key  TEXT NOT NULL,              -- step_id or phase_id
+    state_json      TEXT NOT NULL,              -- full serialized state dict
+    checkpoint_type TEXT NOT NULL DEFAULT 'step', -- step | phase | plan
+    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_checkpoints_thread ON execution_checkpoints(thread_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_checkpoints_thread_key
+    ON execution_checkpoints(thread_id, checkpoint_key);
+
+
+-- =========================================================
+-- FAILURE CLUSTERS (Phase 3)
+-- Groups failure_events by stack_trace_hash
+-- =========================================================
+
+CREATE TABLE IF NOT EXISTS failure_clusters (
+    id                  TEXT PRIMARY KEY,       -- ULID
+    stack_trace_hash    TEXT NOT NULL UNIQUE,
+    cluster_label       TEXT,
+    occurrence_count    INTEGER DEFAULT 1,
+    first_seen_at       DATETIME NOT NULL,
+    last_seen_at        DATETIME NOT NULL,
+    codex_candidate_id  TEXT                    -- nullable: linked candidate
+);
+
+CREATE INDEX IF NOT EXISTS idx_clusters_hash ON failure_clusters(stack_trace_hash);
+
+
+-- =========================================================
+-- PROJECT INSTRUCTIONS (Persistent Instruction Layer)
+-- =========================================================
+
+CREATE TABLE IF NOT EXISTS project_instructions (
+    id                   TEXT PRIMARY KEY,      -- UUID
+    project_id           TEXT NOT NULL,
+    instruction_type     TEXT NOT NULL,         -- project_rule | naming_convention | architecture_constraint
+    content              TEXT NOT NULL,
+    instruction_version  INTEGER DEFAULT 1,
+    active               INTEGER DEFAULT 1,     -- 0/1 soft delete
+    created_at           DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at           DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (project_id) REFERENCES projects(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_instructions_project ON project_instructions(project_id);
+CREATE INDEX IF NOT EXISTS idx_instructions_type    ON project_instructions(instruction_type);
+
+
+-- =========================================================
+-- CONTEXT COMPRESSIONS (Phase 3)
+-- Audit trail of context compression events
+-- =========================================================
+
+CREATE TABLE IF NOT EXISTS context_compressions (
+    id                TEXT PRIMARY KEY,         -- UUID
+    task_id           TEXT NOT NULL,
+    compression_round INTEGER DEFAULT 1,
+    original_tokens   INTEGER,
+    compressed_tokens INTEGER,
+    summary_text      TEXT,
+    created_at        DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (task_id) REFERENCES tasks(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_compressions_task ON context_compressions(task_id);
+
+
+-- =========================================================
+-- ARTIFACTS EXTRACTED (Layer 2: structured extraction)
+-- Phase 4: populated by OCR/Audio/Image pipelines.
+-- =========================================================
+
+CREATE TABLE IF NOT EXISTS artifacts_extracted (
+    id               TEXT PRIMARY KEY,              -- UUID
+    artifact_id      TEXT NOT NULL,
+    pipeline_name    TEXT NOT NULL,                 -- ocr | audio | image | llm_analysis
+    pipeline_version TEXT NOT NULL,
+    model_version    TEXT,
+    engine_version   TEXT NOT NULL DEFAULT '1.0',
+    extraction_data  TEXT NOT NULL DEFAULT '{}',    -- JSON blob
+    confidence_score REAL,
+    retry_count      INTEGER DEFAULT 0,
+    gpu_used         TEXT,
+    processing_ms    INTEGER,
+    created_at       DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (artifact_id) REFERENCES artifacts_raw(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_extracted_artifact ON artifacts_extracted(artifact_id);
+
+
+-- =========================================================
+-- ARTIFACTS ANALYSIS (Layer 3: LLM analysis outputs)
+-- Phase 4: populated by LLMAnalysisPipeline.
+-- =========================================================
+
+CREATE TABLE IF NOT EXISTS artifacts_analysis (
+    id                    TEXT PRIMARY KEY,         -- UUID
+    artifact_id           TEXT NOT NULL,
+    model_id              TEXT,
+    prompt_id             TEXT,
+    prompt_version        TEXT,
+    engine_version        TEXT NOT NULL DEFAULT '1.0',
+    summary_text          TEXT,
+    tags_json             TEXT DEFAULT '[]',
+    reasoning_text        TEXT,
+    validation_score      REAL,
+    routing_decision_json TEXT DEFAULT '{}',
+    processing_ms         INTEGER,
+    created_at            DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (artifact_id) REFERENCES artifacts_raw(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_analysis_artifact ON artifacts_analysis(artifact_id);
+
+
+-- =========================================================
+-- PROCESSING JOBS (Worker Scheduler)
+-- ULID for job IDs per schema-decisions.md.
+-- =========================================================
+
+CREATE TABLE IF NOT EXISTS processing_jobs (
+    id               TEXT PRIMARY KEY,              -- ULID
+    artifact_id      TEXT,
+    job_type         TEXT NOT NULL,                 -- ocr | audio | llm_analysis | image | backfill
+    job_status       TEXT NOT NULL DEFAULT 'QUEUED',
+    priority         INTEGER NOT NULL DEFAULT 5,
+    idempotency_key  TEXT UNIQUE,
+    worker_id        TEXT,
+    retry_count      INTEGER DEFAULT 0,
+    max_retries      INTEGER DEFAULT 3,
+    error_message    TEXT,
+    payload_json     TEXT DEFAULT '{}',
+    result_json      TEXT,
+    created_at       DATETIME DEFAULT CURRENT_TIMESTAMP,
+    started_at       DATETIME,
+    completed_at     DATETIME,
+    FOREIGN KEY (artifact_id) REFERENCES artifacts_raw(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_jobs_status   ON processing_jobs(job_status);
+CREATE INDEX IF NOT EXISTS idx_jobs_artifact ON processing_jobs(artifact_id);
+
+
+-- =========================================================
+-- PIPELINE VERSIONS (Version Tracker)
+-- Enables backfill eligibility checks.
+-- =========================================================
+
+CREATE TABLE IF NOT EXISTS pipeline_versions (
+    id                      TEXT PRIMARY KEY,       -- UUID
+    pipeline_name           TEXT NOT NULL,
+    engine_version          TEXT NOT NULL,
+    model_version           TEXT,
+    prompt_template_version TEXT,
+    chunking_version        TEXT,
+    diarization_version     TEXT,
+    active                  INTEGER DEFAULT 1,
+    created_at              DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (pipeline_name, engine_version)
+);
+
+
+-- =========================================================
+-- EVENT LOG (Event System)
+-- Immutable append-only log of all system events.
+-- =========================================================
+
+CREATE TABLE IF NOT EXISTS event_log (
+    id           TEXT PRIMARY KEY,                  -- ULID
+    event_type   TEXT NOT NULL,
+    artifact_id  TEXT,
+    payload_json TEXT DEFAULT '{}',
+    delivered    INTEGER DEFAULT 0,
+    created_at   DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_event_type    ON event_log(event_type);
+CREATE INDEX IF NOT EXISTS idx_event_created ON event_log(created_at);
+
+
+-- =========================================================
+-- WEBHOOK SUBSCRIBERS (Event System)
+-- UUID for subscriber IDs per schema-decisions.md.
+-- =========================================================
+
+CREATE TABLE IF NOT EXISTS webhook_subscribers (
+    id          TEXT PRIMARY KEY,                   -- UUID
+    url         TEXT NOT NULL UNIQUE,
+    event_types TEXT NOT NULL DEFAULT '[]',
+    active      INTEGER DEFAULT 1,
+    secret      TEXT,
+    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
 """
 
 
@@ -586,6 +851,132 @@ def run_migrations(db_path: Path = DB_PATH) -> None:
             except Exception as e:
                 # Column may already exist if DB was created fresh at v2
                 logger.debug("Migration v1→v2 skipped (column may exist): %s", e)
+
+        # v2 → v3: add tokens_in column (migration v2 was unreliable due to init_db
+        # setting schema_version=2 before the migration ran)
+        if current < 3:
+            try:
+                conn.execute("ALTER TABLE execution_logs ADD COLUMN tokens_in INTEGER")
+                logger.info("Migration v2→v3 applied: added tokens_in to execution_logs")
+            except Exception as e:
+                logger.debug("Migration v2→v3 skipped (column may exist): %s", e)
+            conn.execute("INSERT INTO schema_version (version) VALUES (3)")
+
+        # v3 → v4: add Phase 3 tables via executescript (CREATE TABLE IF NOT EXISTS is idempotent)
+        if current < 4:
+            conn.execute("INSERT INTO schema_version (version) VALUES (4)")
+            logger.info("Migration v3→v4 applied: Phase 3 tables registered")
+
+        # v4 → v5: add context_compressions (added after v4 tag was cut)
+        if current < 5:
+            try:
+                conn.executescript("""
+                CREATE TABLE IF NOT EXISTS context_compressions (
+                    id                TEXT PRIMARY KEY,
+                    task_id           TEXT NOT NULL,
+                    compression_round INTEGER DEFAULT 1,
+                    original_tokens   INTEGER,
+                    compressed_tokens INTEGER,
+                    summary_text      TEXT,
+                    created_at        DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (task_id) REFERENCES tasks(id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_compressions_task ON context_compressions(task_id);
+                """)
+                logger.info("Migration v4→v5 applied: context_compressions table created")
+            except Exception as e:
+                logger.debug("Migration v4→v5 skipped: %s", e)
+            conn.execute("INSERT INTO schema_version (version) VALUES (5)")
+
+        # v5 → v6: add Phase 4 tables (CREATE TABLE IF NOT EXISTS is idempotent)
+        if current < 6:
+            conn.executescript("""
+            CREATE TABLE IF NOT EXISTS artifacts_extracted (
+                id               TEXT PRIMARY KEY,
+                artifact_id      TEXT NOT NULL,
+                pipeline_name    TEXT NOT NULL,
+                pipeline_version TEXT NOT NULL,
+                model_version    TEXT,
+                engine_version   TEXT NOT NULL DEFAULT '1.0',
+                extraction_data  TEXT NOT NULL DEFAULT '{}',
+                confidence_score REAL,
+                retry_count      INTEGER DEFAULT 0,
+                gpu_used         TEXT,
+                processing_ms    INTEGER,
+                created_at       DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (artifact_id) REFERENCES artifacts_raw(id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_extracted_artifact ON artifacts_extracted(artifact_id);
+            CREATE TABLE IF NOT EXISTS artifacts_analysis (
+                id                    TEXT PRIMARY KEY,
+                artifact_id           TEXT NOT NULL,
+                model_id              TEXT,
+                prompt_id             TEXT,
+                prompt_version        TEXT,
+                engine_version        TEXT NOT NULL DEFAULT '1.0',
+                summary_text          TEXT,
+                tags_json             TEXT DEFAULT '[]',
+                reasoning_text        TEXT,
+                validation_score      REAL,
+                routing_decision_json TEXT DEFAULT '{}',
+                processing_ms         INTEGER,
+                created_at            DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (artifact_id) REFERENCES artifacts_raw(id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_analysis_artifact ON artifacts_analysis(artifact_id);
+            CREATE TABLE IF NOT EXISTS processing_jobs (
+                id               TEXT PRIMARY KEY,
+                artifact_id      TEXT,
+                job_type         TEXT NOT NULL,
+                job_status       TEXT NOT NULL DEFAULT 'QUEUED',
+                priority         INTEGER NOT NULL DEFAULT 5,
+                idempotency_key  TEXT UNIQUE,
+                worker_id        TEXT,
+                retry_count      INTEGER DEFAULT 0,
+                max_retries      INTEGER DEFAULT 3,
+                error_message    TEXT,
+                payload_json     TEXT DEFAULT '{}',
+                result_json      TEXT,
+                created_at       DATETIME DEFAULT CURRENT_TIMESTAMP,
+                started_at       DATETIME,
+                completed_at     DATETIME,
+                FOREIGN KEY (artifact_id) REFERENCES artifacts_raw(id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_jobs_status   ON processing_jobs(job_status);
+            CREATE INDEX IF NOT EXISTS idx_jobs_artifact ON processing_jobs(artifact_id);
+            CREATE TABLE IF NOT EXISTS pipeline_versions (
+                id                      TEXT PRIMARY KEY,
+                pipeline_name           TEXT NOT NULL,
+                engine_version          TEXT NOT NULL,
+                model_version           TEXT,
+                prompt_template_version TEXT,
+                chunking_version        TEXT,
+                diarization_version     TEXT,
+                active                  INTEGER DEFAULT 1,
+                created_at              DATETIME DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (pipeline_name, engine_version)
+            );
+            CREATE TABLE IF NOT EXISTS event_log (
+                id           TEXT PRIMARY KEY,
+                event_type   TEXT NOT NULL,
+                artifact_id  TEXT,
+                payload_json TEXT DEFAULT '{}',
+                delivered    INTEGER DEFAULT 0,
+                created_at   DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_event_type    ON event_log(event_type);
+            CREATE INDEX IF NOT EXISTS idx_event_created ON event_log(created_at);
+            CREATE TABLE IF NOT EXISTS webhook_subscribers (
+                id          TEXT PRIMARY KEY,
+                url         TEXT NOT NULL UNIQUE,
+                event_types TEXT NOT NULL DEFAULT '[]',
+                active      INTEGER DEFAULT 1,
+                secret      TEXT,
+                created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
+            """)
+            conn.execute("INSERT INTO schema_version (version) VALUES (6)")
+            logger.info("Migration v5→v6 applied: Phase 4 tables created")
 
         conn.commit()
     finally:
