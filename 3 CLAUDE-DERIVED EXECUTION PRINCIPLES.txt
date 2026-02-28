@@ -1,0 +1,363 @@
+PART 3: CLAUDE-DERIVED EXECUTION PRINCIPLES
+Adaptive AI Execution Framework
+(Behavioral Guidance + Operational Standards)
+
+This document extracts structural lessons from observing Claude Code sessions and converts them into concrete architectural requirements for our system.
+
+This is NOT about copying Claude.
+This is about extracting durable engineering patterns.
+
+The implementing agent may refine structure, add optimizations, or modularize further — but must preserve the intent and system behaviors defined below.
+
+------------------------------------------------------------
+I. CORE OBSERVATIONAL LESSONS
+------------------------------------------------------------
+
+From observed Claude sessions, the following behaviors were identified:
+
+1. State Anchoring Before Action
+2. Persistent Instruction Memory
+3. Plan-Phase Separation
+4. Explicit File Reads Before Edits
+5. Structured Refactor Framing
+6. Context Compression Management
+7. Tool-Augmented Execution
+8. Telemetry Visibility
+9. Deterministic Execution Transparency
+
+These behaviors must influence our system design.
+
+------------------------------------------------------------
+II. STATE RESTORATION REQUIREMENT
+------------------------------------------------------------
+
+Before executing ANY task, the system must restore structured state.
+
+Required pre-task restoration steps:
+
+- Load active project configuration
+- Load current plan version
+- Load execution phase
+- Load project-level architectural notes
+- Query Codex for relevant lessons
+- Identify affected modules
+- Detect cross-module dependencies
+
+This restoration phase must be explicit in logs.
+
+The model must not be asked to “remember” state from conversation history.
+
+State must be reconstructed from persistent storage.
+
+------------------------------------------------------------
+III. PERSISTENT INSTRUCTION LAYER
+------------------------------------------------------------
+
+Claude suggests maintaining a persistent instruction file (e.g., CLAUDE.md).
+
+Our system must support:
+
+- project_rules.md
+- naming_conventions.md
+- architecture_constraints.md
+- database_field_guidelines.md
+- system_policy.md
+
+These documents must be:
+
+- Versioned
+- Loaded before relevant tasks
+- Injected selectively (not always fully)
+- Summarized if exceeding context limits
+
+This ensures architectural consistency.
+
+------------------------------------------------------------
+IV. PLAN-DRIVEN EXECUTION
+------------------------------------------------------------
+
+The system must separate:
+
+PLANNING MODE
+- Generates structured plan
+- Defines phases
+- Outputs step graph
+- Detects module dependencies
+
+EXECUTION MODE
+- Executes single step
+- Validates deterministically
+- Updates task state
+
+The system must store:
+
+- plan_id
+- phase_id
+- step_id
+- step_status
+- plan_version
+- plan_diff_history
+
+If failure cascades occur:
+- Trigger REPLAN MODE
+- Generate plan diff
+- Store new plan version
+
+------------------------------------------------------------
+V. CONTEXT MANAGEMENT POLICY
+------------------------------------------------------------
+
+The system must actively manage context window usage.
+
+Implement:
+
+1. Chunking Strategy
+   - File-level chunking
+   - Semantic chunking
+   - AST-aware chunking (future enhancement)
+
+2. Context Compression
+   - Store summaries of previous steps
+   - Replace raw history with compressed state
+   - Maintain embeddings for raw retrieval
+
+3. Context Tier System
+   - Execution Mode (default context)
+   - Hybrid Mode
+   - Planning Mode
+
+Escalation must be deterministic and logged.
+
+Never rely on infinite context accumulation.
+
+------------------------------------------------------------
+VI. EXPLICIT FILE INTERACTION LOGGING
+------------------------------------------------------------
+
+Every execution must log:
+
+- Files read
+- Chunks loaded
+- Tools executed
+- Diffs applied
+- Modules modified
+
+This supports:
+
+- Reproducibility
+- Failure clustering
+- Performance analysis
+- Codex pattern extraction
+
+------------------------------------------------------------
+VII. STRUCTURED TRANSFORMATION TRACKING
+------------------------------------------------------------
+
+Refactors must be logged as transformations:
+
+Fields to capture:
+
+- transformation_type
+- symbol_from
+- symbol_to
+- modules_affected
+- automated_tool_used (if applicable)
+- validation_status
+
+Example transformation types:
+
+- rename_symbol
+- api_endpoint_change
+- schema_refactor
+- module_split
+- dependency_rewire
+
+This allows learning from transformations rather than raw text edits.
+
+------------------------------------------------------------
+VIII. TOOL-FIRST EXECUTION STRATEGY
+------------------------------------------------------------
+
+Claude uses shell commands for bulk refactors.
+
+Our system must:
+
+- Prefer deterministic tools over hallucinated rewrites
+- Use AST manipulation when possible
+- Use regex/sed when safe
+- Validate changes via test suite
+
+The model should:
+- Plan transformations
+- Identify scope
+- Suggest tool usage
+
+The system should:
+- Execute tools
+- Validate deterministically
+
+------------------------------------------------------------
+IX. TELEMETRY TRANSPARENCY
+------------------------------------------------------------
+
+Every run must log:
+
+- tokens_generated
+- tokens_per_second
+- duration_ms
+- retries
+- context_size
+- model_id
+- score
+
+Routing decisions must be explainable.
+
+Add a field:
+
+- routing_reason
+
+So future audits can determine why a model/config was selected.
+
+------------------------------------------------------------
+X. FAILURE PROMOTION PIPELINE
+------------------------------------------------------------
+
+Not all failures become codex entries.
+
+Promotion rules:
+
+1. Must exceed retry threshold OR
+2. Must require human intervention OR
+3. Must cause downstream breakage
+
+After resolution:
+
+- Generate structured root cause
+- Extract generalized lesson
+- Add prevention_guideline
+- Mark candidate for verification
+
+Never automatically promote without threshold.
+
+------------------------------------------------------------
+XI. ARCHITECTURE ENFORCEMENT LAYER
+------------------------------------------------------------
+
+Claude relies on instruction files to maintain consistency.
+
+Our system must implement:
+
+Architecture Guard:
+
+Before executing modification:
+- Validate naming conventions
+- Validate schema constraints
+- Validate module boundary rules
+
+If violation detected:
+- Reject execution
+- Force revision
+- Log architecture conflict event
+
+------------------------------------------------------------
+XII. REPLAN TRIGGERS
+------------------------------------------------------------
+
+Replan must be triggered if:
+
+- Cascading test failures
+- Cross-module dependency breakage
+- Context exhaustion
+- Retry threshold exceeded
+- Structural mismatch detected
+
+Replan must:
+
+- Summarize current project state
+- Identify broken assumptions
+- Propose structured plan revision
+- Preserve completed stable steps
+
+------------------------------------------------------------
+XIII. ADAPTIVE ROUTING PRINCIPLES
+------------------------------------------------------------
+
+Routing must consider:
+
+- Task type
+- Historical success rate
+- Average retries
+- Hardware profile
+- Context requirement
+- Transformation complexity
+
+Small tasks → fast_model
+Large refactors → reasoning_model
+Architecture tasks → planner_model
+
+Escalation logic must be logged.
+
+------------------------------------------------------------
+XIV. HARDWARE AGNOSTIC DESIGN
+------------------------------------------------------------
+
+On startup:
+
+- Detect GPU
+- Detect VRAM
+- Benchmark tokens/sec
+- Cache hardware profile
+
+Routing must adapt to:
+
+Low capability → conservative context
+High capability → aggressive context
+
+Never assume high-end GPU.
+
+------------------------------------------------------------
+XV. SYSTEM GOAL
+------------------------------------------------------------
+
+This system is NOT:
+
+- A chat interface
+- A reactive LLM wrapper
+- A code generator only
+
+This system IS:
+
+- A structured execution engine
+- A telemetry-driven model router
+- A persistent institutional memory layer
+- A deterministic validation pipeline
+- A context-managed orchestration framework
+
+------------------------------------------------------------
+XVI. IMPLEMENTATION DIRECTIVES
+------------------------------------------------------------
+
+The implementing agent may:
+
+- Normalize schema further
+- Optimize indexing
+- Introduce vector search
+- Add caching layers
+- Improve chunk storage
+- Add concurrency control
+- Introduce background aggregation jobs
+
+But must preserve:
+
+- Deterministic grading
+- Structured plan execution
+- Persistent codex memory
+- Explicit logging
+- Tool-first strategy
+- Hardware agnosticism
+
+------------------------------------------------------------
+END OF PART 3
+------------------------------------------------------------
+
+This document must be treated as architectural doctrine for system behavior.

@@ -1,0 +1,371 @@
+PART 7 — MISSION CONTROL ENGINE (PROCESSING PLATFORM)
+
+You are building the Mission Control Engine.
+
+This is the core processing platform.
+It is API-first.
+It is modular.
+It is domain-agnostic.
+It augments external systems (like Civic), but does not replace them.
+
+This engine must support:
+- OCR
+- Handwriting detection & recognition
+- Audio transcription
+- Diarization orchestration
+- Artifact storage
+- Version tracking
+- Backfill processing
+- Worker scheduling
+- Codex learning
+- Telemetry tracking
+- Migration/export
+- Event emission
+
+The engine must NOT contain CLI logic.
+The engine must NOT contain UI rendering.
+It is headless infrastructure.
+
+==================================================
+I. ARCHITECTURE PRINCIPLES
+==================================================
+
+1. API-first (FastAPI preferred).
+2. Modular pipelines.
+3. Stateless request handling where possible.
+4. All processing versioned.
+5. Canonical artifact schema.
+6. Clear separation of domain (Civic) from engine.
+7. Pluggable worker architecture.
+8. Event-driven capability (pub/sub or webhook).
+9. GPU-aware scheduling.
+10. Idempotent processing.
+
+==================================================
+II. CORE MODULES
+==================================================
+
+1. Artifact Registry
+2. Processing Pipelines
+3. Worker Scheduler
+4. Version Tracker
+5. Codex (learning DB)
+6. Telemetry Engine
+7. Migration Layer
+8. Event System
+9. Authentication & Scoping
+10. SQL Safe Interface
+
+Each must be modular and independently testable.
+
+==================================================
+III. ARTIFACT REGISTRY
+==================================================
+
+Artifacts must be stored in 3 layers:
+
+Layer 1 — Immutable Raw
+- Original file
+- SHA256 hash
+- Source metadata
+- Ingest timestamp
+
+Layer 2 — Structured Extraction
+- OCR blocks
+- Layout segments
+- Tables
+- Diarization segments
+- Transcript segments
+- Signatures
+- Redactions
+- Confidence scores
+- Model + pipeline versions
+
+Layer 3 — Analysis
+- Summaries
+- Tags
+- Reasoning outputs
+- Validation scores
+- Model routing decisions
+
+Artifacts must include:
+- artifact_id (UUID)
+- artifact_version
+- pipeline_version
+- schema_version
+- processing_state
+
+States:
+RECEIVED
+PROCESSING
+PROCESSED
+AVAILABLE_FOR_EXPORT
+EXPORTED
+ARCHIVED
+
+Artifacts must be exportable in canonical JSON format.
+
+==================================================
+IV. PROCESSING PIPELINES
+==================================================
+
+Pipelines must be modular.
+
+Supported pipelines:
+
+A) OCR Pipeline
+- Layout detection
+- Printed OCR
+- Handwriting detection
+- Handwriting recognition (if detected)
+- Table extraction
+- Signature detection
+- Redaction detection
+- Metadata extraction
+- Confidence scoring
+
+B) Audio Pipeline
+- Transcription (Whisper/faster-whisper)
+- Diarization orchestration (via Civic API if configured)
+- Speaker matching (reference-only mode)
+- Segment alignment
+- Transcript confidence scoring
+
+C) Image Analysis Pipeline
+- Image classification
+- Object detection (optional)
+- Text extraction (if image contains text)
+- Layout analysis (if document image)
+
+D) LLM Analysis Pipeline
+- Chunk builder
+- Context compression
+- Router-based model selection
+- Summary generation
+- Tag generation
+- Validation scoring
+
+Each pipeline must record:
+- model versions
+- processing time
+- retry count
+- GPU used
+- success/failure
+
+==================================================
+V. WORKER SCHEDULER
+==================================================
+
+Must support:
+
+- Queue-based job processing
+- Priority levels
+- Hardware awareness
+- Concurrency limits
+- Backfill mode
+- Idempotency keys
+
+Job states:
+QUEUED
+RUNNING
+FAILED
+COMPLETED
+RETRYING
+
+Workers must be pluggable.
+Support enabling/disabling workers (e.g., civic worker).
+
+==================================================
+VI. VERSION TRACKING
+==================================================
+
+Every pipeline stage must record:
+
+- engine_version
+- model_version
+- prompt_template_version
+- chunking_version
+- diarization_version (if applicable)
+
+Artifacts must be eligible for backfill if:
+- model version changes
+- prompt version changes
+- schema version changes
+- pipeline version changes
+
+Provide endpoint:
+POST /backfill
+
+With simulation mode.
+
+==================================================
+VII. CODEX (LEARNING DATABASE)
+==================================================
+
+Codex stores:
+
+- failure patterns
+- human overrides
+- routing improvements
+- task scoring data
+- known error corrections
+
+Codex entries must include:
+- pattern
+- resolution
+- confidence
+- occurrence_count
+- last_seen
+
+Codex must support:
+- global scope
+- project scope
+- exportable memory
+- versioning
+
+Codex must never directly alter domain DB.
+It influences routing and prompt injection only.
+
+==================================================
+VIII. TELEMETRY ENGINE
+==================================================
+
+Track:
+
+- task_id
+- artifact_id
+- model used
+- context tier
+- retries
+- tokens used
+- processing time
+- score
+- escalation events
+
+Telemetry must be queryable via API.
+Support export.
+
+==================================================
+IX. MIGRATION LAYER
+==================================================
+
+Engine must expose:
+
+GET /artifacts
+GET /artifacts/{id}
+POST /artifacts/{id}/migrate
+POST /artifacts/export
+
+Engine does NOT write directly to Civic DB.
+
+Civic must pull or receive via webhook.
+
+Support:
+- Version comparison
+- Hash comparison
+- Safe re-ingest
+
+==================================================
+X. EVENT SYSTEM
+==================================================
+
+Emit events:
+
+artifact.created
+artifact.processed
+artifact.reprocessed
+artifact.failed
+backfill.completed
+codex.updated
+
+Support:
+- Webhook subscribers
+- Redis pub/sub (optional phase 2)
+
+Events must be idempotent.
+
+==================================================
+XI. AUTHENTICATION & SCOPES
+==================================================
+
+Support API keys with scopes:
+
+artifact:read
+artifact:write
+audio:process
+ocr:process
+backfill:execute
+codex:read
+codex:write
+sql:query
+
+Services (Civic, CLI, Atlas) must use scoped keys.
+
+==================================================
+XII. GPU ALLOCATION LOGIC
+==================================================
+
+Scheduler must:
+- Detect available GPU(s)
+- Track VRAM usage
+- Prevent over-allocation
+- Assign heavy jobs to capable GPUs
+- Support CPU fallback
+
+Provide:
+GET /system/hardware
+
+==================================================
+XIII. SQL SAFE INTERFACE
+==================================================
+
+Expose:
+POST /sql/query
+
+Must support:
+- Read-only mode default
+- Explicit write mode
+- Query logging
+- Execution time logging
+
+Never expose raw DB connection.
+
+==================================================
+XIV. DESIGN CONSTRAINTS
+==================================================
+
+- No domain-specific logic (Civic owns domain truth).
+- Engine must remain reusable.
+- No tight coupling to one system.
+- All pipelines modular.
+- All outputs versioned.
+- All state transitions explicit.
+
+==================================================
+XV. DELIVERY REQUIREMENTS
+==================================================
+
+Provide:
+
+- Clean folder structure
+- Pipeline registry
+- Worker registry
+- Artifact schema
+- Versioning system
+- Event dispatcher
+- API routes
+- Background job manager
+- Config system
+- Environment variable support
+- Testing scaffolding
+- Clear documentation
+
+Engine must feel:
+
+Modular.
+Scalable.
+Professional.
+Extensible.
+Infrastructure-grade.
+
+END OF ENGINE SPEC.

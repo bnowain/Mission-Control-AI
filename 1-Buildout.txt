@@ -1,0 +1,321 @@
+Your task is to design and implement Part 1 of a portable, hardware-agnostic Adaptive AI Execution Framework.
+
+This system must work on any GPU (8GB → 48GB+), any model (7B → 70B+), and optionally cloud APIs. The intelligence must live in orchestration, not inside the model.
+
+Do NOT hardcode assumptions about:
+- GPU size
+- Model size
+- Context window
+- Quant format
+- Vendor (Ollama, OpenAI, Anthropic, etc.)
+
+Design for portability, modularity, and long-term extensibility.
+
+------------------------------------------------------------
+HIGH-LEVEL OBJECTIVE
+------------------------------------------------------------
+
+Build an AI development engine that:
+
+1. Executes coding and planning tasks using local or remote LLMs
+2. Grades model performance objectively
+3. Logs telemetry per task
+4. Adapts model routing based on historical success
+5. Persists institutional memory (Codex)
+6. Learns from failures requiring retries or human intervention
+7. Injects prior lessons before future similar tasks
+8. Supports dynamic context escalation (16k → 24k → 32k)
+9. Works efficiently on small GPUs but scales upward
+
+This is NOT a chatbot.
+This is a structured execution engine.
+
+------------------------------------------------------------
+CORE DESIGN PRINCIPLES
+------------------------------------------------------------
+
+1. The Model Is a Worker
+   - The LLM does not hold system memory.
+   - It does not decide success.
+   - It does not own the plan.
+   - It is invoked with structured inputs.
+
+2. Deterministic Validation
+   - All success grading must be based on:
+     - Compiler results
+     - Test runner results
+     - Static analysis
+     - Runtime validation
+     - Structured diffs
+   - Never rely on model self-assessment as ground truth.
+
+3. Persistent System Memory
+   - Lessons learned must persist beyond sessions.
+   - Memory must be queryable before each task.
+   - Failures must update memory only after verified resolution.
+
+4. Hardware Agnostic
+   - On startup, detect hardware capability.
+   - Benchmark model speed.
+   - Adjust routing defaults accordingly.
+   - Do not assume large VRAM.
+
+5. Adaptive Routing
+   - Track per-model success per task type.
+   - Track retries, escalation frequency, and downstream breakage.
+   - Route future tasks to best-performing configuration.
+
+------------------------------------------------------------
+PHASE 1 IMPLEMENTATION SCOPE
+------------------------------------------------------------
+
+Build the foundational orchestration framework.
+
+Phase 1 must include:
+
+A. Model Interface Layer (Pluggable)
+B. Execution Engine
+C. Grading Engine
+D. Telemetry Logger
+E. Router (initial version, rule-based)
+F. Context Escalation Mechanism
+G. Codex Pre-Task Injection Hook
+
+Do NOT implement the full database schema yet.
+Stub interfaces where necessary.
+Focus on architecture and flow.
+
+------------------------------------------------------------
+A. MODEL INTERFACE LAYER
+------------------------------------------------------------
+
+Create a unified model abstraction:
+
+class ModelExecutor:
+    - run(task, context_size, temperature, tools=None)
+    - returns structured result object
+
+Provide placeholders for:
+- Ollama backend
+- OpenAI backend
+- Anthropic backend
+
+The rest of the system must not depend on a specific provider.
+
+------------------------------------------------------------
+B. EXECUTION ENGINE
+------------------------------------------------------------
+
+Execution flow must:
+
+1. Receive structured task object:
+   - task_id
+   - task_type (bug_fix, file_edit, refactor_small, refactor_large, architecture_design, etc.)
+   - relevant_files
+   - constraints
+   - expected_output_type
+
+2. Pre-Task Phase:
+   - Query Codex (stub for now)
+   - Inject prevention_guidelines into prompt
+   - Build execution context
+
+3. Model Execution Phase:
+   - Invoke selected model via Router
+   - Track time
+   - Capture tokens used
+   - Capture retries
+
+4. Validation Phase:
+   - Run deterministic grading checks
+   - Compute score
+
+5. Post-Execution Phase:
+   - Log telemetry
+   - If failure threshold exceeded:
+       - Trigger escalation
+       - Or trigger replan mode
+
+6. If human intervention detected:
+   - Flag for Codex promotion candidate
+
+------------------------------------------------------------
+C. GRADING ENGINE
+------------------------------------------------------------
+
+Define a scoring system (configurable):
+
+Score range: 0–100
+
+Base success:
++40 compile success
++30 tests pass
++15 lint/typecheck pass
++15 runtime success
+
+Penalties:
+-10 per retry
+-20 human intervention
+-25 downstream task invalidation
+-30 architecture change required
+
+Make grading configurable via config file.
+
+Return:
+- score
+- pass/fail
+- retry_count
+- human_flag
+- downstream_impact_flag
+
+------------------------------------------------------------
+D. TELEMETRY LOGGER
+------------------------------------------------------------
+
+Log per execution:
+
+- task_id
+- task_type
+- model_name
+- quant
+- context_size
+- tokens_generated
+- tokens_per_second
+- retries
+- score
+- success
+- human_intervention
+- duration_ms
+- timestamp
+
+This must be abstracted behind an interface.
+Database implementation comes in Part 2.
+
+------------------------------------------------------------
+E. ROUTER (INITIAL VERSION)
+------------------------------------------------------------
+
+Router must:
+
+Inputs:
+- task_type
+- historical telemetry (stub)
+- hardware capability
+- model availability
+
+Output:
+- selected_model
+- context_size
+- temperature
+
+Initial version can be rule-based:
+- small edits → smaller model
+- large refactors → larger model
+- architecture_design → highest reasoning model
+
+Must support:
+- automatic escalation after repeated failure
+- context escalation (16k → 24k → 32k)
+
+Do NOT hardcode model names.
+Use capability categories:
+- fast_model
+- reasoning_model
+- planner_model
+
+------------------------------------------------------------
+F. CONTEXT ESCALATION LOGIC
+------------------------------------------------------------
+
+Define three tiers:
+
+Execution Mode → default context (e.g. 16k)
+Hybrid Mode → mid context (e.g. 24k)
+Planning Mode → large context (e.g. 32k)
+
+Escalation triggers:
+- retries > threshold
+- cross-module edits detected
+- cascading test failures
+- router confidence low
+
+Must be configurable.
+
+------------------------------------------------------------
+G. CODEX PRE-TASK HOOK (STUB)
+------------------------------------------------------------
+
+Before execution:
+
+- Generate task_signature
+- Query Codex for matching issue patterns (stub)
+- Inject prevention guidelines into prompt
+
+Do not implement DB yet.
+Create interface only:
+
+class CodexEngine:
+    def query(task_signature)
+    def register_candidate(issue_data)
+
+------------------------------------------------------------
+REPLAN MODE (FOUNDATION ONLY)
+------------------------------------------------------------
+
+Implement a mode flag:
+
+Normal Mode:
+- Execute next task
+
+Replan Mode:
+- Summarize current state
+- Identify broken assumptions
+- Propose updated task structure
+- Return structured plan diff
+
+Do not implement full planner yet.
+Provide scaffolding.
+
+------------------------------------------------------------
+NON-FUNCTIONAL REQUIREMENTS
+------------------------------------------------------------
+
+- Must run on small GPU setups
+- Must degrade gracefully
+- Must not assume large context always available
+- Must allow future vector search integration
+- Must be modular
+- Must allow adding reinforcement scoring later
+
+------------------------------------------------------------
+DELIVERABLES FOR PART 1
+------------------------------------------------------------
+
+1. Clean architecture diagram (text-based)
+2. Module structure proposal
+3. Core class definitions (Python)
+4. Execution flow pseudocode
+5. Configuration structure
+6. Escalation policy design
+7. Router logic v1
+8. Telemetry structure (interface only)
+9. Codex interface stub
+10. Clear notes on where Phase 2 (DB schema) will integrate
+
+You are allowed to:
+- Improve architecture
+- Add efficiency mechanisms
+- Suggest optimizations
+- Add modularity improvements
+
+But you must:
+- Keep portability
+- Keep hardware agnostic
+- Keep grading deterministic
+- Keep model interface abstract
+
+Design this as if it will become a public open-source project.
+
+Do not skip details.
+Be explicit.
+Prioritize clarity and extensibility.

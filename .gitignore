@@ -1,0 +1,56 @@
+# Database — never commit the live DB file
+database/*.db
+database/*.db-wal
+database/*.db-shm
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
+
+# Virtual environments
+venv/
+.venv/
+env/
+.env/
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+
+# Frontend (Phase 5)
+node_modules/
+.next/
+out/
+frontend/dist/
+frontend/build/
+
+# Logs (structured logs go to DB, not flat files)
+*.log
+
+# Claude Code — local machine-specific settings (permissions, etc.)
+.claude/settings.local.json
+
+# OS
+.DS_Store
+Thumbs.db

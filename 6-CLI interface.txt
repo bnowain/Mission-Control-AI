@@ -1,0 +1,298 @@
+PART 6 — MISSION CONTROL CLI (THIN API CLIENT)
+
+You are building the Mission Control CLI.
+
+This CLI is NOT the engine.
+It is NOT the processing layer.
+It is NOT the database layer.
+
+It is a thin, professional, API-driven control surface for the Mission Control platform.
+
+The CLI must call the Mission Control backend exclusively via HTTP (or WebSocket where appropriate).
+
+Never implement heavy processing logic in the CLI.
+
+==================================================
+I. CORE PRINCIPLES
+==================================================
+
+1. CLI is a client of the Mission Control API.
+2. No direct database access.
+3. No direct filesystem manipulation beyond file uploads.
+4. All state changes occur through API calls.
+5. Must support both interactive and non-interactive usage.
+6. Must be scriptable.
+7. Must be composable (supports piping and JSON output).
+
+==================================================
+II. TECHNOLOGY STACK
+==================================================
+
+Language: Python
+Framework: Typer (preferred) or Click
+HTTP: httpx or requests
+Streaming: WebSocket client
+Rendering: rich (for colors and compact header)
+Config: JSON config in ~/.mission-control/config.json
+
+==================================================
+III. CLI COMMAND STRUCTURE
+==================================================
+
+Base invocation:
+
+mission-control <command> [options]
+
+Interactive mode:
+
+mission-control coder
+
+==================================================
+IV. GLOBAL OPTIONS
+==================================================
+
+--api-endpoint
+--api-key
+--project
+--model
+--context
+--json (machine-readable output)
+--color [auto|always|never]
+--debug
+--quiet
+
+==================================================
+V. CORE COMMANDS
+==================================================
+
+1. task
+
+mission-control task create --type <type> --file <file>
+mission-control task run <task_id>
+mission-control task cancel <task_id>
+mission-control task list
+mission-control task replay <task_id>
+
+All commands must call API endpoints:
+POST /tasks
+GET /tasks
+GET /tasks/{id}
+POST /tasks/{id}/cancel
+POST /tasks/{id}/replay
+
+--------------------------------------------------
+
+2. status
+
+mission-control status
+
+Calls:
+GET /system/status
+
+Displays compact dynamic header.
+
+--------------------------------------------------
+
+3. artifacts
+
+mission-control artifacts list
+mission-control artifacts view <artifact_id>
+mission-control artifacts export <artifact_id>
+mission-control artifacts migrate <artifact_id> --target civic
+
+Calls:
+GET /artifacts
+GET /artifacts/{id}
+POST /artifacts/{id}/export
+POST /artifacts/{id}/migrate
+
+--------------------------------------------------
+
+4. backfill
+
+mission-control backfill --target civic --after 2025-01-01
+mission-control backfill --simulate
+
+Calls:
+POST /backfill
+
+--------------------------------------------------
+
+5. router
+
+mission-control router stats
+mission-control router override --model reasoning_model
+
+Calls:
+GET /router/stats
+POST /router/override
+
+--------------------------------------------------
+
+6. telemetry
+
+mission-control telemetry list
+mission-control telemetry view <run_id>
+mission-control telemetry export <run_id>
+
+Calls:
+GET /telemetry
+GET /telemetry/{id}
+
+--------------------------------------------------
+
+7. sql
+
+mission-control sql "SELECT * FROM artifacts LIMIT 5"
+mission-control sql --interactive
+
+Calls:
+POST /sql/query
+
+CLI must never connect to DB directly.
+
+--------------------------------------------------
+
+8. workers
+
+mission-control workers list
+mission-control workers enable civic
+mission-control workers disable civic
+
+Calls:
+GET /workers
+POST /workers/{id}/enable
+POST /workers/{id}/disable
+
+==================================================
+VI. INTERACTIVE MODE
+==================================================
+
+mission-control coder
+
+Features:
+- Compact dynamic header
+- Streaming task execution
+- Tab completion
+- Slash commands
+- Persistent session state
+
+Prompt format:
+
+🚀 civic_media | qwen-32k | 24k | READY >
+
+When running:
+
+🚀 civic_media | qwen-32k | 24k | RUNNING >
+
+Streaming must show:
+- Context build
+- Model selected
+- Escalation events
+- Validation output
+- Score
+- Final status
+
+Header must re-render on state change.
+
+==================================================
+VII. FILE + CLIPBOARD SUPPORT
+==================================================
+
+File ingestion:
+
+mission-control analyze document.pdf
+mission-control analyze meeting.mp3
+
+Clipboard ingestion (Windows PowerShell support):
+
+mission-control analyze --clipboard
+
+If clipboard contains:
+- Image → upload as image
+- Text → treat as prompt
+- Audio → error unless supported
+
+All uploads sent to:
+POST /tasks
+
+==================================================
+VIII. OUTPUT MODES
+==================================================
+
+Human mode:
+- Colored output
+- Rich formatting
+- Compact header
+
+JSON mode (--json):
+- Raw structured API response
+- No colors
+- No ASCII header
+
+==================================================
+IX. CONFIGURATION
+==================================================
+
+Store config in:
+~/.mission-control/config.json
+
+Fields:
+- api_endpoint
+- api_key
+- default_project
+- default_model
+- default_context
+- color_mode
+- debug_mode
+
+Allow override via environment variables:
+MISSION_CONTROL_API_KEY
+MISSION_CONTROL_ENDPOINT
+
+==================================================
+X. SECURITY
+==================================================
+
+- Never store raw API key in plaintext if avoidable.
+- Support environment variable override.
+- Do not log sensitive information in debug mode.
+- All SQL commands must go through API safe mode.
+
+==================================================
+XI. NON-GOALS (IMPORTANT)
+==================================================
+
+The CLI must NOT:
+- Run OCR
+- Run diarization
+- Access database directly
+- Perform voiceprint matching
+- Store artifacts locally beyond temp upload
+
+All intelligence resides in backend.
+
+==================================================
+XII. DELIVERY REQUIREMENTS
+==================================================
+
+Provide:
+- Clean folder structure
+- Modular command files
+- API client abstraction layer
+- Streaming handler
+- Compact header renderer
+- Config loader
+- Setup for pip install
+- Clear separation of concerns
+
+This CLI must feel:
+Professional.
+Fast.
+Stable.
+Scriptable.
+Enterprise-ready.
+
+It is a control bridge, not the engine.
+
+END OF CLI SPEC.

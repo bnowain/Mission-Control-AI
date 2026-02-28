@@ -1,0 +1,381 @@
+PART 8 — PLATFORM HARDENING, GOVERNANCE & TESTING SPEC
+Mission Control Engine – Production Readiness Layer
+
+You are implementing production-grade hardening for the Mission Control Engine.
+
+This layer ensures:
+
+- Stability
+- Reproducibility
+- Observability
+- Security
+- Testability
+- Long-term maintainability
+
+This is infrastructure-level work.
+
+==================================================
+I. OBSERVABILITY & METRICS
+==================================================
+
+Implement:
+
+1. /health endpoint
+   - returns service status
+   - DB connectivity
+   - worker status
+   - GPU status
+
+2. /metrics endpoint (Prometheus-compatible)
+   Track:
+   - task_count_total
+   - task_failures_total
+   - pipeline_duration_seconds
+   - gpu_memory_usage_bytes
+   - queue_depth
+   - active_workers
+   - retry_count
+   - escalation_count
+
+3. Structured logging (JSON logs)
+   - request_id
+   - artifact_id
+   - task_id
+   - api_key_id
+   - timestamp
+   - level
+   - message
+
+4. Log levels:
+   DEBUG
+   INFO
+   WARNING
+   ERROR
+   CRITICAL
+
+==================================================
+II. AUDIT LOGGING
+==================================================
+
+Implement audit log table:
+
+Fields:
+- audit_id
+- timestamp
+- api_key_id
+- action_type
+- artifact_id
+- task_id
+- ip_address
+- result
+- metadata_json
+
+Actions tracked:
+- artifact.uploaded
+- task.created
+- task.cancelled
+- artifact.migrated
+- sql.query.executed
+- backfill.triggered
+- codex.promoted
+- voiceprint.matched
+
+Audit logs must be immutable.
+
+==================================================
+III. IDEMPOTENCY & DEDUPLICATION
+==================================================
+
+Implement:
+
+- Idempotency-Key header support
+- Artifact SHA256 hash index
+- Pipeline version hash comparison
+
+If:
+- Same artifact
+- Same pipeline version
+- Same prompt version
+
+Return cached result.
+
+Never duplicate work.
+
+==================================================
+IV. PROMPT VERSIONING SYSTEM
+==================================================
+
+Create prompt registry table:
+
+- prompt_id
+- name
+- version
+- template_text
+- created_at
+- deprecated (bool)
+
+Each LLM task must store:
+- prompt_id
+- prompt_version
+- template_hash
+
+Backfill eligibility must detect prompt version change.
+
+==================================================
+V. MODEL REGISTRY
+==================================================
+
+Create model registry:
+
+- model_id
+- model_name
+- provider
+- context_limit
+- latency_class
+- gpu_required
+- deprecated
+- version
+
+Router must reference model registry, not hardcoded values.
+
+==================================================
+VI. SCHEMA EVOLUTION
+==================================================
+
+Implement:
+
+- schema_version field in artifacts
+- migration scripts for schema updates
+- backward compatibility layer
+- schema migration log
+
+Artifact export must include schema_version.
+
+==================================================
+VII. HUMAN OVERRIDE LAYER
+==================================================
+
+Implement override tables:
+
+1. OCR correction
+2. Speaker resolution override
+3. Summary correction
+4. Tag override
+
+Each override must store:
+- original_value
+- corrected_value
+- corrected_by
+- timestamp
+- artifact_version
+- reason
+
+Overrides must not alter raw layer.
+
+Overrides may feed Codex if approved.
+
+==================================================
+VIII. DATA LINEAGE
+==================================================
+
+Track transformation graph:
+
+- artifact_id
+- derived_from_artifact_id
+- pipeline_stage
+- model_version
+- timestamp
+
+Allow tracing:
+Raw → OCR → Chunk → Summary → Migration
+
+==================================================
+IX. FEATURE FLAGS
+==================================================
+
+Implement feature flag registry:
+
+- flag_name
+- enabled
+- rollout_percentage
+- project_scope
+
+Flags:
+- handwriting_v2
+- layoutlm_upgrade
+- diarization_v3
+- codex_auto_promote
+- adaptive_router_v2
+
+==================================================
+X. SANDBOX & SAFETY
+==================================================
+
+Implement:
+
+- File size limits
+- Execution timeouts
+- Memory limits
+- SQL read-only default
+- Rate limiting per API key
+- Restricted external API calls
+
+==================================================
+XI. STORAGE MANAGEMENT
+==================================================
+
+Implement:
+
+- Hot storage
+- Cold storage flag
+- Artifact archival endpoint
+- Storage usage metrics
+
+==================================================
+XII. TESTING STRATEGY
+==================================================
+
+You must implement both:
+
+1. Backend Unit & Integration Tests
+2. End-to-End Tests (Playwright headless)
+3. Load Testing
+4. Failure Injection Tests
+
+==================================================
+XIII. BACKEND TESTS (Pytest)
+==================================================
+
+Create tests for:
+
+Artifact Tests:
+- test_artifact_creation
+- test_artifact_deduplication
+- test_artifact_versioning
+- test_artifact_migration_flag
+
+Pipeline Tests:
+- test_ocr_pipeline_success
+- test_handwriting_detection
+- test_audio_transcription
+- test_diarization_orchestration
+- test_llm_summary_generation
+
+Versioning Tests:
+- test_prompt_version_trigger_backfill
+- test_model_registry_lookup
+- test_schema_migration
+
+Codex Tests:
+- test_codex_pattern_injection
+- test_codex_confidence_increment
+- test_codex_scope_isolation
+
+Idempotency Tests:
+- test_duplicate_request_same_key
+- test_duplicate_request_no_key
+
+Telemetry Tests:
+- test_task_metrics_logged
+- test_gpu_usage_logged
+
+Audit Tests:
+- test_audit_log_created_on_task
+
+==================================================
+XIV. FAILURE INJECTION TESTS
+==================================================
+
+Simulate:
+
+- GPU out-of-memory
+- Model timeout
+- Diarization API offline
+- SQL injection attempt
+- Worker crash
+- Backfill conflict
+- Corrupt artifact
+
+System must:
+- Fail gracefully
+- Log correctly
+- Not corrupt data
+- Preserve audit log
+
+==================================================
+XV. PLAYWRIGHT END-TO-END TESTS
+==================================================
+
+Create headless browser tests for:
+
+1. Dashboard load
+2. Create task via UI
+3. Upload file
+4. View artifact details
+5. Trigger migration
+6. View telemetry
+7. SQL console read query
+8. Feature flag toggle
+9. Backfill simulation
+10. Human override correction flow
+
+Verify:
+- Correct API calls made
+- UI state updates correctly
+- Streaming output works
+- No console errors
+- Header updates correctly
+
+==================================================
+XVI. LOAD TESTING
+==================================================
+
+Implement load test scripts:
+
+Simulate:
+- 100 concurrent artifact uploads
+- 50 concurrent LLM tasks
+- 20 backfill tasks
+
+Measure:
+- Queue latency
+- Worker utilization
+- Failure rate
+- Average processing time
+
+==================================================
+XVII. DISASTER RECOVERY
+==================================================
+
+Implement:
+
+- Backup script for DB
+- Artifact storage backup procedure
+- Config backup
+- Restore script
+- Test restore procedure
+
+==================================================
+XVIII. DELIVERY REQUIREMENTS
+==================================================
+
+Provide:
+
+- Complete test suite
+- CI pipeline config
+- Linting config
+- Type checking
+- Coverage report
+- Test documentation
+- Clear setup instructions
+
+The system must be:
+
+Deterministic.
+Observable.
+Auditable.
+Reproducible.
+Recoverable.
+Scalable.
+
+END OF PART 8.

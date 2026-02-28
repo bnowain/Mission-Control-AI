@@ -1,0 +1,129 @@
+PROJECT DIRECTIVE — SHARED KNOWLEDGEBASE ARCHITECTURE + PROJECT BUILD
+
+Before writing any code:
+
+1. Recursively read and analyze everything in this directory.
+2. Identify:
+   - Existing database schemas
+   - Any codex-related tables or files
+   - Current storage patterns (MD files, JSON, text logs)
+   - Any learning systems
+   - Model routing systems
+   - Any Civic integration points
+   - Any shared utilities or abstractions
+
+Do NOT begin implementation yet.
+
+--------------------------------------------------
+
+OBJECTIVE
+
+I want to build a new project in THIS DIRECTORY that implements a shared, structured knowledgebase system.
+
+This is not just a conceptual addition.
+This will be a real project/module inside this directory.
+
+The purpose of this project is to consolidate all knowledge systems into a database-backed layer.
+
+This includes:
+
+- Master Codex
+- Project-level codexes
+- Shared indexes
+- Learning corrections
+- Failure patterns
+- Prompt refinements
+- Model scoring history
+- Resolution history
+- Supersession tracking
+
+I want to eliminate:
+- Writing to markdown files
+- Writing to loose text logs
+- Fragmented per-project knowledge storage
+
+Instead:
+All knowledge should be stored in a shared database system with a defined API roadmap.
+
+--------------------------------------------------
+
+CRITICAL REQUIREMENTS
+
+1. The shared knowledgebase must:
+   - Support multiple projects
+   - Support scoped knowledge (global vs project-level)
+   - Track model source (OpenAI cloud vs local models)
+   - Track versioning
+   - Track overwrite/supersession history
+   - Maintain full audit trail
+   - Be queryable via API
+   - Be safe for long-term infrastructure use
+
+2. Cloud vs Local Separation
+
+The system must clearly separate:
+   - OpenAI cloud model knowledge
+   - Local model knowledge
+
+They must not overlap silently.
+
+However:
+   - They must be able to read each other.
+   - If one resolves a problem better, it may supersede the other.
+   - Supersession must be explicit and versioned.
+   - No destructive overwrites.
+   - All prior versions must remain recoverable.
+
+3. Compatibility Constraints
+
+The new project must:
+   - Not break the current Civic database.
+   - Not introduce circular dependencies.
+   - Not tightly couple unrelated systems.
+   - Provide a clean integration path.
+   - Allow phased migration from text/MD storage.
+
+4. Migration Goal
+
+Existing knowledge written to:
+   - .md files
+   - text logs
+   - JSON fragments
+
+Should be migrated into structured database form.
+
+Provide a migration strategy.
+
+--------------------------------------------------
+
+YOUR TASK
+
+Before building:
+
+1. Propose the architecture for this shared knowledgebase project.
+2. Identify conflicts with my current database.
+3. Identify anti-patterns in this plan.
+4. Challenge assumptions if unsafe or poor practice.
+5. Propose high-level schema design.
+6. Propose versioning and supersession strategy.
+7. Propose migration plan.
+8. Propose API surface roadmap.
+9. Identify risks of cloud/local cross-contamination.
+10. Identify performance and scaling concerns.
+
+You may suggest better alternatives if appropriate.
+
+Do NOT implement yet.
+
+Provide:
+
+- Architectural proposal
+- Risk analysis
+- Migration plan
+- High-level schema outline
+- Open questions that must be answered before implementation
+
+If any part of this request is flawed, explain clearly why.
+
+We are designing long-term infrastructure.
+Correctness and separation of concerns matter more than speed.

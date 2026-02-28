@@ -1,0 +1,345 @@
+PART 4: SPACESHIP ARCHITECTURE — API-FIRST AUTONOMOUS EXECUTION OS
+
+You are a senior systems architect.
+
+Your objective is to design and implement a comprehensive, API-first Adaptive AI Execution Framework that serves as a programmable operating system for LLM-based engineering workflows.
+
+This system must:
+
+- Be model-agnostic
+- Be hardware-agnostic
+- Be vendor-agnostic
+- Be deterministic where possible
+- Be reproducible
+- Be API-first (every capability exposed programmatically)
+
+This is not a chatbot.
+This is not a prompt wrapper.
+This is a structured execution platform.
+
+------------------------------------------------------------
+I. CORE PHILOSOPHY
+------------------------------------------------------------
+
+1. LLMs are workers.
+2. The system is the brain.
+3. Deterministic validators are ground truth.
+4. Context is a managed resource.
+5. Every action must be observable and replayable.
+6. Everything must be callable via API.
+
+------------------------------------------------------------
+II. API-FIRST DESIGN REQUIREMENT (CRITICAL)
+------------------------------------------------------------
+
+Every major subsystem must be exposed via REST or RPC API.
+
+Internal calls should use the same interfaces as external calls.
+
+This ensures:
+- Remote orchestration
+- Atlas-style integration
+- CLI + UI decoupling
+- Multi-node scaling
+- Future SaaS capability
+- Automation pipelines
+
+------------------------------------------------------------
+III. CORE API MODULES
+------------------------------------------------------------
+
+The system must expose at minimum:
+
+------------------------------------------------------------
+1) TASK API
+------------------------------------------------------------
+
+POST /tasks
+- Create new task
+- Includes task_type, project_id, files, constraints
+
+GET /tasks/{id}
+- Retrieve task status
+- Include score, retries, logs
+
+POST /tasks/{id}/execute
+- Execute task step
+- Supports mode:
+  - execution
+  - planning
+  - replan
+
+POST /tasks/{id}/cancel
+
+------------------------------------------------------------
+2) PLAN API
+------------------------------------------------------------
+
+POST /plans
+- Create structured plan
+- Return DAG
+
+GET /plans/{id}
+- Retrieve plan
+
+POST /plans/{id}/replan
+- Trigger replan
+
+GET /plans/{id}/diff
+- Show plan version diff
+
+------------------------------------------------------------
+3) ROUTER API
+------------------------------------------------------------
+
+POST /router/select
+- Input: task_type, complexity, hardware_profile
+- Output: selected_model, context_size, reasoning
+
+GET /router/stats
+- Return per-model performance
+
+------------------------------------------------------------
+4) MODEL EXECUTION API
+------------------------------------------------------------
+
+POST /models/run
+- Input: structured task context
+- Output: structured result
+
+GET /models
+- List available models
+
+POST /models/benchmark
+- Run benchmark
+
+------------------------------------------------------------
+5) VALIDATION API
+------------------------------------------------------------
+
+POST /validate
+- Run deterministic checks
+- Compile
+- Test
+- Lint
+- Typecheck
+- Security
+- Perf
+
+GET /validate/results/{id}
+
+------------------------------------------------------------
+6) CODEX API
+------------------------------------------------------------
+
+POST /codex/query
+- Input: task_signature
+- Output: relevant lessons
+
+POST /codex/candidate
+- Register failure candidate
+
+POST /codex/promote
+- Promote verified lesson
+
+GET /codex/stats
+
+------------------------------------------------------------
+7) CONTEXT API
+------------------------------------------------------------
+
+POST /context/build
+- Input: files + constraints
+- Output: optimized working set
+
+POST /context/compress
+- Compress history
+
+------------------------------------------------------------
+8) TELEMETRY API
+------------------------------------------------------------
+
+GET /telemetry/runs
+GET /telemetry/models
+GET /telemetry/performance
+GET /telemetry/hardware
+
+------------------------------------------------------------
+IV. INTERNAL SYSTEM MODULES
+------------------------------------------------------------
+
+core/
+- Task DAG engine
+- State machine
+- Execution loop
+- Replan controller
+
+models/
+- Provider adapters (ollama, openai, anthropic, vllm, llama.cpp)
+
+context/
+- Chunker (file + AST-aware)
+- Summarizer
+- Working set builder
+
+tools/
+- Codemod engine
+- Shell runner (sandboxed)
+- Diff analyzer
+
+validate/
+- Deterministic grading engine
+- Security scanner
+- Performance runner
+
+router/
+- Adaptive routing logic
+- Escalation policy
+- Hardware profiler
+- Statistical bandit
+
+codex/
+- Global + project memory
+- Promotion pipeline
+- Failure clustering
+
+telemetry/
+- Structured logs
+- Replay system
+- Run inspection
+
+api/
+- FastAPI or equivalent
+- Strict schema validation (Pydantic)
+- Async-ready
+
+------------------------------------------------------------
+V. REPLAY + REPRODUCIBILITY REQUIREMENT
+------------------------------------------------------------
+
+Every execution must record:
+
+- model_id
+- context_size
+- prompt template version
+- injected chunk hashes
+- tool commands
+- diff output
+- validator results
+- routing decision + reason
+
+Add:
+
+POST /runs/{id}/replay
+
+This replays the task with identical parameters.
+
+------------------------------------------------------------
+VI. MULTI-MODE EXECUTION
+------------------------------------------------------------
+
+Modes:
+
+1) execution
+2) planning
+3) replan
+4) validation-only
+5) benchmark-only
+
+All modes must be accessible via API.
+
+------------------------------------------------------------
+VII. SCALABILITY ARCHITECTURE
+------------------------------------------------------------
+
+Must support:
+
+- Single-node local mode
+- Multi-node distributed mode
+- Remote worker pool
+- Model workers separate from control plane
+
+Design with:
+
+Control Plane (API + Router + Codex)
+Execution Plane (Model Workers + Validators)
+
+------------------------------------------------------------
+VIII. SECURITY + SANDBOXING
+------------------------------------------------------------
+
+All shell/tool execution must:
+
+- Run sandboxed
+- Restrict file system scope
+- Log all commands
+- Block destructive operations unless explicitly allowed
+
+------------------------------------------------------------
+IX. PERFORMANCE OPTIMIZATION
+------------------------------------------------------------
+
+Implement:
+
+- Context caching
+- Chunk hash reuse
+- Router result caching
+- Model warm pool
+- Async validation pipeline
+- Background aggregation for routing stats
+
+------------------------------------------------------------
+X. OPTIONAL BUT HIGH-IMPACT ADVANCED FEATURES
+------------------------------------------------------------
+
+- Bandit-based routing
+- Automatic fix-forward playbooks
+- Module boundary enforcement
+- Change impact analyzer
+- Contract validation engine
+- Cost-aware routing for cloud APIs
+- User role layers
+- Per-project profiles
+
+------------------------------------------------------------
+XI. PRODUCT OBJECTIVE
+------------------------------------------------------------
+
+This platform must become:
+
+The most comprehensive programmable LLM execution engine available.
+
+Not just powerful —
+Inspectable.
+Deterministic.
+Adaptive.
+Composable.
+Extensible.
+API-native.
+
+------------------------------------------------------------
+XII. IMPLEMENTATION PRIORITY ORDER
+------------------------------------------------------------
+
+Phase 1:
+- API skeleton
+- Task runner
+- Deterministic validator
+- Basic router
+- Telemetry logging
+
+Phase 2:
+- Codex
+- Plan DAG
+- Context OS
+- Escalation policies
+
+Phase 3:
+- Multi-agent roles
+- Replay system
+- Benchmarking engine
+- Distributed workers
+
+------------------------------------------------------------
+END OF PART 4
+------------------------------------------------------------

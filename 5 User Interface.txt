@@ -1,0 +1,422 @@
+PART 5: USER INTERFACE — MISSION CONTROL COCKPIT
+Adaptive AI Execution OS
+API-FIRST • OBSERVABLE • EXTENSIBLE • PROFESSIONAL
+
+You are a senior frontend + full-stack architect.
+
+Your task is to design and implement a comprehensive, API-first Mission Control UI for the Adaptive AI Execution Framework.
+
+This UI must:
+
+- Be modern, clean, and fast
+- Be easy to navigate
+- Be scalable
+- Be modular
+- Be fully API-driven
+- Be production-ready
+- Support expansion into distributed workers
+- Support SQL access
+- Support external API integrations
+- Support reports and analytics
+- Be usable by power users
+
+This is not a chatbot UI.
+
+This is an execution control cockpit.
+
+------------------------------------------------------------
+I. TECH STACK REQUIREMENTS
+------------------------------------------------------------
+
+Frontend:
+- React + TypeScript
+- Vite or Next.js (app router)
+- Zustand or Redux Toolkit for state
+- React Flow for DAG
+- Monaco Editor for diff + SQL
+- TailwindCSS + component library (shadcn/ui recommended)
+- ECharts or Chart.js for analytics
+- WebSocket support for live updates
+
+Backend:
+- Must use existing FastAPI API
+- All calls must go through API layer
+- No direct database access from frontend
+
+------------------------------------------------------------
+II. PRIMARY NAVIGATION STRUCTURE
+------------------------------------------------------------
+
+Left Sidebar Navigation:
+
+1. Dashboard (Mission Control)
+2. Tasks
+3. Plans
+4. Validation
+5. Codex
+6. Router Analytics
+7. Telemetry
+8. Reports
+9. SQL Console
+10. Integrations
+11. Workers (future-ready)
+12. Settings
+
+------------------------------------------------------------
+III. DASHBOARD (MISSION CONTROL)
+------------------------------------------------------------
+
+This is the landing page.
+
+Must display:
+
+- Active tasks
+- Task health indicators
+- Model currently in use
+- Context tier
+- Retry count
+- Escalation state
+- Score
+- Hardware profile
+- Token throughput
+- Worker status (if present)
+- System health
+
+Include:
+
+- Real-time stream panel (WebSocket)
+- Escalation event ticker
+- Quick launch task button
+
+------------------------------------------------------------
+IV. TASKS PANEL
+------------------------------------------------------------
+
+Features:
+
+- Task list with filters:
+  - status
+  - task_type
+  - model
+  - score range
+  - date
+- Task detail page:
+  - Diff viewer (Monaco)
+  - Validation results
+  - Router reasoning
+  - Codex warnings injected
+  - Execution telemetry
+  - Replay button
+  - Escalation history
+  - Files read
+  - Tools executed
+
+Must allow:
+- Manual override model selection
+- Manual context override
+- Cancel task
+- Re-run task
+- Promote failure to Codex candidate
+
+------------------------------------------------------------
+V. PLAN GRAPH VIEW
+------------------------------------------------------------
+
+Use React Flow.
+
+Display:
+- DAG of plan steps
+- Node colors:
+  - green (validated)
+  - yellow (running)
+  - red (failed)
+  - blue (replanned)
+- Click node → open side panel:
+  - Step prompt
+  - Files involved
+  - Validation results
+  - Diff preview
+  - Retry history
+
+Must support:
+- Replan trigger
+- Step rerun
+- Plan version comparison
+
+------------------------------------------------------------
+VI. VALIDATION PANEL
+------------------------------------------------------------
+
+Displays deterministic checks.
+
+Tabs:
+
+- Compile
+- Tests
+- Lint
+- Typecheck
+- Security
+- Performance
+
+Each tab:
+- Logs
+- Duration
+- Pass/fail indicator
+- Download raw output
+
+------------------------------------------------------------
+VII. CODEX PANEL
+------------------------------------------------------------
+
+Searchable memory interface.
+
+Display:
+
+- Global lessons
+- Project lessons
+- Candidates
+- Occurrence counts
+- Confidence score
+- Linked tasks
+
+Must support:
+
+- Promote candidate
+- Merge lessons
+- Deprecate lesson
+- Edit root cause
+- Tag categories
+- Vector similarity view (if enabled)
+
+------------------------------------------------------------
+VIII. ROUTER ANALYTICS PANEL
+------------------------------------------------------------
+
+Charts:
+
+- Success rate per model
+- Score distribution per task type
+- Retry averages
+- Escalation frequency
+- Context tier usage
+- Tokens/sec by model
+- Cost metrics (if cloud)
+
+Controls:
+
+- Exploration rate slider
+- Lock model toggle
+- Adjust escalation threshold
+- Enable/disable bandit mode
+
+------------------------------------------------------------
+IX. TELEMETRY PANEL
+------------------------------------------------------------
+
+Run history explorer.
+
+Filters:
+- date range
+- project
+- model
+- success
+- score threshold
+
+Details:
+
+- Prompt template version
+- Chunk hashes injected
+- Routing reason
+- Execution time
+- Reproducibility ID
+
+Must support:
+- Replay run
+- Compare runs
+- Export JSON
+
+------------------------------------------------------------
+X. REPORTS PANEL
+------------------------------------------------------------
+
+Generate:
+
+- Project health report
+- Model performance report
+- Codex effectiveness report
+- Cost analysis report
+- Failure cluster report
+
+Reports exportable as:
+- PDF
+- JSON
+- Markdown
+
+------------------------------------------------------------
+XI. SQL CONSOLE
+------------------------------------------------------------
+
+Secure SQL interface.
+
+Features:
+
+- Monaco SQL editor
+- Schema browser
+- Query history
+- Safe mode (read-only default)
+- Explicit toggle for write mode
+- Query execution logs
+- Result table with pagination
+- CSV export
+
+Must not bypass API.
+Use dedicated backend SQL endpoint with guardrails.
+
+------------------------------------------------------------
+XII. INTEGRATIONS PANEL
+------------------------------------------------------------
+
+Manage:
+
+- External APIs
+- Webhooks
+- Atlas integration
+- CI/CD hooks
+- Slack/Discord notifications
+- GitHub/GitLab integration
+- Webhook event logs
+
+Allow:
+- Add API key
+- Test connection
+- Enable/disable integration
+- Define event triggers
+
+------------------------------------------------------------
+XIII. WORKERS PANEL (FUTURE-READY)
+------------------------------------------------------------
+
+Even if not active in v1, design structure for:
+
+- Worker list
+- Worker status
+- Assigned tasks
+- Hardware profile
+- Health metrics
+- Manual enable/disable
+
+------------------------------------------------------------
+XIV. SETTINGS PANEL
+------------------------------------------------------------
+
+Sections:
+
+General
+- Default model
+- Default context tier
+- Default temperature
+- Retry threshold
+- Escalation threshold
+
+Router
+- Exploration rate
+- Bandit mode toggle
+- Model class mapping
+
+Validation
+- Enable/disable validators
+- Scoring weights
+
+Codex
+- Promotion threshold
+- Auto-promotion toggle
+- Decay policy
+
+Security
+- Shell sandbox toggle
+- File scope restrictions
+- API token management
+
+Advanced
+- Debug mode
+- Verbose logging
+- Experimental features
+
+------------------------------------------------------------
+XV. UX REQUIREMENTS
+------------------------------------------------------------
+
+- Clean, modern design
+- Keyboard shortcuts
+- Dark mode
+- Responsive layout
+- Fast load times
+- Lazy loading for heavy panels
+- Accessible design
+
+------------------------------------------------------------
+XVI. REAL-TIME CAPABILITIES
+------------------------------------------------------------
+
+Use WebSockets for:
+
+- Task execution stream
+- Validation stream
+- Escalation events
+- Worker status updates
+
+------------------------------------------------------------
+XVII. PERFORMANCE OPTIMIZATION
+------------------------------------------------------------
+
+- API caching
+- Virtualized lists for large logs
+- Incremental chart updates
+- Debounced filters
+- Background data refresh
+
+------------------------------------------------------------
+XVIII. SECURITY REQUIREMENTS
+------------------------------------------------------------
+
+- Role-based access control
+- API token management
+- SQL safe mode
+- Audit logs
+- Session management
+
+------------------------------------------------------------
+XIX. DESIGN STANDARD
+------------------------------------------------------------
+
+The UI must feel:
+
+Professional.
+Powerful.
+Transparent.
+Not toy-like.
+Not cluttered.
+
+It should resemble:
+
+CI dashboard + IDE + data analytics platform.
+
+------------------------------------------------------------
+XX. DELIVERY REQUIREMENTS
+------------------------------------------------------------
+
+Deliver:
+
+- Component architecture
+- Route map
+- State management structure
+- API integration layer
+- Mock data fallback mode
+- Production build configuration
+- WebSocket integration
+- Theme system
+- Clear folder structure
+
+------------------------------------------------------------
+END OF PART 5
+------------------------------------------------------------
