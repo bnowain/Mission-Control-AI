@@ -23,7 +23,7 @@ DB_PATH = Path(__file__).resolve().parents[2] / "database" / "mission_control.db
 # ---------------------------------------------------------------------------
 # Schema version — bump when making additive changes
 # ---------------------------------------------------------------------------
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 # ---------------------------------------------------------------------------
 # DDL
@@ -140,7 +140,8 @@ CREATE TABLE IF NOT EXISTS execution_logs (
     context_size          INTEGER NOT NULL,
     context_tier          TEXT,                     -- execution | hybrid | planning
     temperature           REAL,
-    tokens_generated      INTEGER,
+    tokens_in             INTEGER,                  -- prompt tokens consumed
+    tokens_generated      INTEGER,                  -- completion tokens produced
     tokens_per_second     REAL,
     retries               INTEGER DEFAULT 0,
 
@@ -575,7 +576,17 @@ def run_migrations(db_path: Path = DB_PATH) -> None:
         ).fetchone()
         current = row["version"] if row else 0
         logger.info("Schema migration check", extra={"current_version": current, "target_version": SCHEMA_VERSION})
-        # No migrations needed yet — schema version 1 is baseline
+
+        # v1 → v2: add tokens_in column for prompt token tracking
+        if current < 2:
+            try:
+                conn.execute("ALTER TABLE execution_logs ADD COLUMN tokens_in INTEGER")
+                conn.execute("INSERT INTO schema_version (version) VALUES (2)")
+                logger.info("Migration v1→v2 applied: added tokens_in to execution_logs")
+            except Exception as e:
+                # Column may already exist if DB was created fresh at v2
+                logger.debug("Migration v1→v2 skipped (column may exist): %s", e)
+
         conn.commit()
     finally:
         conn.close()

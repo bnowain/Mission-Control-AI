@@ -1,0 +1,228 @@
+MODEL STACK EXPANSION + ROUTING STRATEGY DIRECTIVE
+
+First: The current router architecture is correct.
+Keep the capability-class abstraction:
+
+- fast_model
+- reasoning_model
+- planner_model
+
+Do NOT hardcode model names anywhere.
+All changes must remain config-driven.
+
+We are expanding the stack — not replacing it.
+
+--------------------------------------------------
+
+GOAL
+
+We want a hybrid local/cloud stack optimized for a 5090 (32GB VRAM) that:
+
+1. Uses fast local models by default.
+2. Escalates intelligently.
+3. Keeps cloud usage explicit and isolated.
+4. Tracks performance per model.
+5. Allows UI-based reassignment later.
+
+--------------------------------------------------
+
+PROPOSED STACK (MERGED)
+
+We will support the following model tiers.
+
+TIER 0 — FAST / UTILITY
+
+Purpose:
+- Bug fixes
+- Small edits
+- Test writing
+- File diffs
+- JSON formatting
+- Routing classification
+- Tag generation
+- Simple summarization
+
+Candidates:
+- ollama/qwen2.5:7b
+- ollama/llama3.1:8b
+- ollama/deepseek:7b
+
+Default:
+fast_model → qwen2.5:7b (unless we test and find better)
+
+This model should be:
+- Extremely fast
+- Low latency
+- Used as default execution engine
+
+--------------------------------------------------
+
+TIER 1 — WORKHORSE / REASONING
+
+Purpose:
+- Multi-file edits
+- Refactors
+- Code synthesis
+- Document-level reasoning
+- Pipeline orchestration
+- Structured output generation
+
+Candidates:
+- ollama/qwen2.5:32b
+- ollama/deepseek-coder:33b
+- ollama/mixtral:8x7b (if pulled)
+
+Default:
+reasoning_model → qwen2.5:32b
+
+If task.type == "code-heavy":
+Prefer deepseek-coder:33b (if available).
+
+--------------------------------------------------
+
+TIER 2 — HEAVY ARBITRATION (LOCAL OPTIONAL)
+
+Purpose:
+- Conflict resolution
+- Complex debugging
+- Multi-artifact synthesis
+- Backfill validation
+- Low-confidence escalation
+
+Candidates:
+- ollama/qwen:72b (Q4 if feasible)
+- ollama/llama3:70b
+
+This tier is optional and should only trigger if:
+- reasoning_model confidence < threshold
+- validation fails
+- retry limit exceeded
+
+This must not be default.
+
+--------------------------------------------------
+
+CLOUD TIER — PLANNER / ARCHITECT
+
+Purpose:
+- High-level architecture
+- Replanning
+- Meta-reasoning
+- System design validation
+- Rare arbitration
+
+Current:
+planner_model → anthropic/claude-opus-4-6
+
+Rules:
+- Cloud must never overwrite local knowledge silently.
+- Cloud outputs must be tagged as source=cloud.
+- Cloud usage must be logged separately.
+- Escalation to cloud must be explicit.
+
+--------------------------------------------------
+
+ROUTING LOGIC
+
+1. Task enters system.
+2. fast_model performs classification.
+3. Router decides:
+   - small/simple → fast_model
+   - multi-file/moderate complexity → reasoning_model
+   - architecture/meta → planner_model
+4. After execution:
+   - Validate JSON (if required)
+   - Score confidence
+   - If low confidence → escalate to next tier
+   - Never downgrade mid-task
+
+Escalation order:
+fast → reasoning → heavy_local (optional) → cloud
+
+--------------------------------------------------
+
+SPECIALIZATION RULES
+
+If task.category == "code":
+    Prefer coder variant if registered.
+
+If task.category == "analysis" and context_size > threshold:
+    Use reasoning_model.
+
+If task.category == "architecture":
+    Use planner_model.
+
+--------------------------------------------------
+
+CONFIG REQUIREMENTS
+
+config/models.json must support:
+
+{
+  "fast_model": "...",
+  "reasoning_model": "...",
+  "planner_model": "...",
+  "heavy_model": "... (optional)",
+  "coder_model": "... (optional)"
+}
+
+Router must:
+- Gracefully handle missing heavy_model.
+- Never crash if a tier is not configured.
+
+--------------------------------------------------
+
+PERFORMANCE TRACKING (MANDATORY)
+
+For every execution record:
+
+- model_used
+- tier
+- tokens_in
+- tokens_out
+- duration
+- retry_count
+- escalation_count
+- success/failure
+- validation_score
+
+We will later use this to tune assignments.
+
+--------------------------------------------------
+
+IMPORTANT ARCHITECTURAL RULES
+
+1. Model names never appear in business logic.
+2. Capability classes only.
+3. Cloud and local knowledge separated in DB.
+4. No silent cross-tier overwrites.
+5. All escalations logged.
+
+--------------------------------------------------
+
+NEXT STEP
+
+Before modifying models.json:
+
+Run:
+    ollama list
+
+Then propose:
+
+- Best assignment for fast_model
+- Best assignment for reasoning_model
+- Whether coder_model should be separate
+- Whether heavy_model is realistic on current hardware
+
+Do NOT assume 72B fits until verified.
+
+--------------------------------------------------
+
+We are not choosing one stack.
+We are building an adaptive stack.
+
+The router abstraction stays.
+Assignments become configurable.
+Escalation becomes measurable.
+
+Proceed with proposing model assignments based on actual installed Ollama models.

@@ -41,21 +41,31 @@ CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "models.json"
 EXAMPLE_CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "models.example.json"
 
 # Hard-coded routing rules: task_type → minimum capability class
+# Code tasks route to CODER_MODEL; general tasks to FAST_MODEL.
 _TASK_ROUTING: dict[TaskType, CapabilityClass] = {
-    TaskType.BUG_FIX:             CapabilityClass.FAST_MODEL,
-    TaskType.FILE_EDIT:           CapabilityClass.FAST_MODEL,
-    TaskType.TEST_WRITE:          CapabilityClass.FAST_MODEL,
+    TaskType.BUG_FIX:             CapabilityClass.CODER_MODEL,
+    TaskType.FILE_EDIT:           CapabilityClass.CODER_MODEL,
+    TaskType.TEST_WRITE:          CapabilityClass.CODER_MODEL,
+    TaskType.REFACTOR_SMALL:      CapabilityClass.CODER_MODEL,
     TaskType.DOCS:                CapabilityClass.FAST_MODEL,
     TaskType.GENERIC:             CapabilityClass.FAST_MODEL,
-    TaskType.REFACTOR_SMALL:      CapabilityClass.FAST_MODEL,
     TaskType.REFACTOR_LARGE:      CapabilityClass.REASONING_MODEL,
     TaskType.ARCHITECTURE_DESIGN: CapabilityClass.PLANNER_MODEL,
 }
 
-# Escalation path: fast → reasoning → planner
+# Main escalation path: fast → reasoning → heavy (optional) → planner
 _ESCALATION_PATH: list[CapabilityClass] = [
     CapabilityClass.FAST_MODEL,
     CapabilityClass.REASONING_MODEL,
+    CapabilityClass.HEAVY_MODEL,
+    CapabilityClass.PLANNER_MODEL,
+]
+
+# Coder escalation: coder → reasoning → heavy (optional) → planner
+_CODER_ESCALATION_PATH: list[CapabilityClass] = [
+    CapabilityClass.CODER_MODEL,
+    CapabilityClass.REASONING_MODEL,
+    CapabilityClass.HEAVY_MODEL,
     CapabilityClass.PLANNER_MODEL,
 ]
 
@@ -213,36 +223,66 @@ class AdaptiveRouter:
     def _maybe_escalate_class(
         self, base: CapabilityClass, retry_count: int
     ) -> CapabilityClass:
-        """Escalate capability class after 3 retries."""
+        """Escalate capability class after 3 retries.
+        CODER uses its own escalation path; all others use the main path.
+        HEAVY_MODEL is skipped if not available on this hardware.
+        """
         if retry_count < 3:
             return base
-        idx = _ESCALATION_PATH.index(base) if base in _ESCALATION_PATH else 0
-        next_idx = min(idx + 1, len(_ESCALATION_PATH) - 1)
-        escalated = _ESCALATION_PATH[next_idx]
-        if escalated != base:
-            log.info("Capability escalation", from_class=base.value, to_class=escalated.value, retries=retry_count)
-        return escalated
+
+        path = (
+            _CODER_ESCALATION_PATH
+            if base == CapabilityClass.CODER_MODEL
+            else _ESCALATION_PATH
+        )
+
+        idx = path.index(base) if base in path else 0
+        # Scan forward — skip HEAVY_MODEL if not available on this hardware
+        for candidate in path[idx + 1:]:
+            if candidate == CapabilityClass.HEAVY_MODEL and candidate not in self._available_classes:
+                continue
+            if candidate != base:
+                log.info("Capability escalation", from_class=base.value, to_class=candidate.value, retries=retry_count)
+            return candidate
+
+        return base  # already at top of path
 
     def _best_available(self, desired: CapabilityClass) -> CapabilityClass:
-        """Return the best available class at or above desired."""
-        idx = _ESCALATION_PATH.index(desired) if desired in _ESCALATION_PATH else 0
-        for cls in _ESCALATION_PATH[idx:]:
+        """Return the best available class at or above desired.
+        Uses coder escalation path when desired is CODER_MODEL.
+        HEAVY_MODEL is skipped gracefully if not configured.
+        """
+        path = (
+            _CODER_ESCALATION_PATH
+            if desired == CapabilityClass.CODER_MODEL
+            else _ESCALATION_PATH
+        )
+        idx = path.index(desired) if desired in path else 0
+        for cls in path[idx:]:
             if cls in self._available_classes:
                 return cls
-        # Always fall back to whatever is available
+        # Always fall back to whatever is available (planner is always in list)
         return self._available_classes[-1]
 
     def _tier_for_class(self, cls: CapabilityClass) -> ContextTier:
         tiers = {
             CapabilityClass.FAST_MODEL:      ContextTier.EXECUTION,
+            CapabilityClass.CODER_MODEL:     ContextTier.EXECUTION,
             CapabilityClass.REASONING_MODEL: ContextTier.HYBRID,
+            CapabilityClass.HEAVY_MODEL:     ContextTier.PLANNING,
             CapabilityClass.PLANNER_MODEL:   ContextTier.PLANNING,
         }
         return tiers.get(cls, ContextTier.EXECUTION)
 
     def _temperature_for(self, task_type: TaskType) -> float:
-        """Lower temperature for deterministic tasks."""
-        low_temp = {TaskType.BUG_FIX, TaskType.FILE_EDIT, TaskType.TEST_WRITE}
+        """Lower temperature for deterministic/code tasks."""
+        low_temp = {
+            TaskType.BUG_FIX,
+            TaskType.FILE_EDIT,
+            TaskType.TEST_WRITE,
+            TaskType.REFACTOR_SMALL,
+            TaskType.REFACTOR_LARGE,
+        }
         return 0.1 if task_type in low_temp else 0.3
 
     def _build_reason(

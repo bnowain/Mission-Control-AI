@@ -23,10 +23,14 @@ from app.models.schemas import CapabilityClass, HardwareProfile
 log = get_logger("hardware")
 
 # VRAM thresholds (MB) — must match CAPABILITY_CLASSES in schemas.py
+# HEAVY_MODEL and PLANNER_MODEL are omitted here — handled separately below:
+#   HEAVY_MODEL: optional local tier, requires 40GB+ (may not be available)
+#   PLANNER_MODEL: always available via cloud API regardless of VRAM
 _VRAM_THRESHOLDS: dict[CapabilityClass, int] = {
-    CapabilityClass.FAST_MODEL:      0,
-    CapabilityClass.REASONING_MODEL: 20_000,
-    CapabilityClass.PLANNER_MODEL:   40_000,
+    CapabilityClass.FAST_MODEL:      0,        # CPU-runnable (7B models)
+    CapabilityClass.CODER_MODEL:     4_000,    # 4GB min (7B–16B coder models)
+    CapabilityClass.REASONING_MODEL: 20_000,   # 20GB min (32B models)
+    CapabilityClass.HEAVY_MODEL:     40_000,   # 40GB min (70B+ optional tier)
 }
 
 # Module-level cache — detected once per process
@@ -91,6 +95,9 @@ def available_capability_classes(profile: HardwareProfile) -> list[CapabilityCla
     # Cloud planner is always available (API-based, no VRAM required)
     if CapabilityClass.PLANNER_MODEL not in classes:
         classes.append(CapabilityClass.PLANNER_MODEL)
+
+    # HEAVY_MODEL is optional — only included if VRAM qualifies (40GB+)
+    # It does NOT get auto-added like PLANNER_MODEL — no cloud fallback for heavy
 
     return classes
 

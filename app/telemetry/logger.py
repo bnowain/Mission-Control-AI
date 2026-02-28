@@ -64,6 +64,7 @@ class TelemetryLogger:
         project_id: str,
         decision: RoutingDecision,
         grading: GradingResult,
+        tokens_in: Optional[int] = None,
         tokens_generated: Optional[int] = None,
         tokens_per_second: Optional[float] = None,
         duration_ms: Optional[int] = None,
@@ -87,7 +88,7 @@ class TelemetryLogger:
                 INSERT INTO execution_logs (
                     id, task_id, project_id, model_id,
                     context_size, context_tier, temperature,
-                    tokens_generated, tokens_per_second, retries,
+                    tokens_in, tokens_generated, tokens_per_second, retries,
                     score, passed,
                     compile_success, tests_passed, lint_passed, runtime_success,
                     human_intervention, downstream_impact,
@@ -97,7 +98,7 @@ class TelemetryLogger:
                 ) VALUES (
                     ?, ?, ?, ?,
                     ?, ?, ?,
-                    ?, ?, ?,
+                    ?, ?, ?, ?,
                     ?, ?,
                     ?, ?, ?, ?,
                     ?, ?,
@@ -114,6 +115,7 @@ class TelemetryLogger:
                     decision.context_size,
                     decision.context_tier.value,
                     decision.temperature,
+                    tokens_in,
                     tokens_generated,
                     tokens_per_second,
                     grading.retry_count,

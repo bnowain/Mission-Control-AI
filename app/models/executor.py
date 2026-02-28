@@ -255,6 +255,7 @@ def _build_result(
 ) -> ExecutionResult:
     """Extract text + token counts from a LiteLLM response object."""
     response_text = ""
+    tokens_in: int | None = None
     tokens_generated: int | None = None
     tokens_per_second: float | None = None
 
@@ -264,6 +265,7 @@ def _build_result(
 
     if hasattr(response, "usage") and response.usage:
         usage = response.usage
+        tokens_in        = getattr(usage, "prompt_tokens", None)
         tokens_generated = getattr(usage, "completion_tokens", None)
         if tokens_generated and elapsed_ms > 0:
             tokens_per_second = round(tokens_generated / (elapsed_ms / 1000), 1)
@@ -271,6 +273,7 @@ def _build_result(
     return ExecutionResult(
         decision=decision,
         response_text=response_text,
+        tokens_in=tokens_in,
         tokens_generated=tokens_generated,
         tokens_per_second=tokens_per_second,
         duration_ms=elapsed_ms,

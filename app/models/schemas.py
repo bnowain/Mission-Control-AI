@@ -48,7 +48,9 @@ class TaskStatus(str, Enum):
 
 class CapabilityClass(str, Enum):
     FAST_MODEL      = "fast_model"
+    CODER_MODEL     = "coder_model"     # code-specialised (deepseek-coder-v2, qwen-coder)
     REASONING_MODEL = "reasoning_model"
+    HEAVY_MODEL     = "heavy_model"     # optional 70B+ local tier
     PLANNER_MODEL   = "planner_model"
 
 
@@ -61,6 +63,7 @@ class ContextTier(str, Enum):
 class ModelSource(str, Enum):
     CLOUD_ANTHROPIC = "cloud:anthropic"
     CLOUD_OPENAI    = "cloud:openai"
+    CLOUD_DEEPSEEK  = "cloud:deepseek"
     LOCAL_OLLAMA    = "local:ollama"
     LOCAL_VLLM      = "local:vllm"
     HUMAN           = "human"
@@ -167,7 +170,8 @@ class ExecutionLog(BaseModel):
     context_size:           int
     context_tier:           Optional[ContextTier] = None
     temperature:            Optional[float] = None
-    tokens_generated:       Optional[int] = None
+    tokens_in:              Optional[int] = None    # prompt tokens consumed
+    tokens_generated:       Optional[int] = None    # completion tokens produced
     tokens_per_second:      Optional[float] = None
     retries:                int = 0
 
@@ -278,7 +282,8 @@ class ExecutionResult(BaseModel):
     """
     decision:          RoutingDecision
     response_text:     str
-    tokens_generated:  Optional[int] = None
+    tokens_in:         Optional[int] = None    # prompt tokens consumed
+    tokens_generated:  Optional[int] = None    # completion tokens produced
     tokens_per_second: Optional[float] = None
     duration_ms:       Optional[int] = None
     retry_count:       int = 0
@@ -310,6 +315,8 @@ CONTEXT_TIER_SIZES: dict[ContextTier, int] = {
 
 CAPABILITY_CLASSES: dict[CapabilityClass, dict] = {
     CapabilityClass.FAST_MODEL:      {"min_vram_mb": 0,      "default_context": 16_384},
+    CapabilityClass.CODER_MODEL:     {"min_vram_mb": 4_000,  "default_context": 16_384},
     CapabilityClass.REASONING_MODEL: {"min_vram_mb": 20_000, "default_context": 24_576},
-    CapabilityClass.PLANNER_MODEL:   {"min_vram_mb": 40_000, "default_context": 32_768},
+    CapabilityClass.HEAVY_MODEL:     {"min_vram_mb": 40_000, "default_context": 32_768},
+    CapabilityClass.PLANNER_MODEL:   {"min_vram_mb": 0,      "default_context": 32_768},  # cloud — no VRAM req
 }
