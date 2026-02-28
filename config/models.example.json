@@ -1,0 +1,49 @@
+{
+  "_comment": "Copy to config/models.json and fill in your actual model paths/API keys.",
+  "_comment2": "Never hardcode model names in code. Route by capability_class only.",
+
+  "routing_strategy": "latency-based-routing",
+
+  "deployments": [
+    {
+      "capability_class": "fast_model",
+      "model_name": "fast_model",
+      "litellm_params": {
+        "model": "ollama/qwen2.5:7b",
+        "api_base": "http://localhost:11434"
+      }
+    },
+    {
+      "capability_class": "reasoning_model",
+      "model_name": "reasoning_model",
+      "litellm_params": {
+        "model": "ollama/qwen2.5:32b",
+        "api_base": "http://localhost:11434"
+      }
+    },
+    {
+      "capability_class": "planner_model",
+      "model_name": "planner_model",
+      "litellm_params": {
+        "model": "anthropic/claude-opus-4-6",
+        "api_key": "${ANTHROPIC_API_KEY}"
+      }
+    }
+  ],
+
+  "fallbacks": [
+    {"fast_model": ["reasoning_model"]},
+    {"reasoning_model": ["planner_model"]}
+  ],
+
+  "context_tiers": {
+    "execution": 16384,
+    "hybrid":    24576,
+    "planning":  32768
+  },
+
+  "retry": {
+    "num_retries": 3,
+    "timeout_seconds": 60
+  }
+}

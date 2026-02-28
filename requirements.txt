@@ -1,0 +1,30 @@
+# Mission Control — Python dependencies
+# Python 3.13+
+
+# ── Core framework ─────────────────────────────────────────────────────────
+fastapi>=0.115.0
+uvicorn>=0.34.0
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+
+# ── LLM routing & structured output ────────────────────────────────────────
+litellm>=1.81.0
+instructor>=1.14.0
+
+# ── IDs ────────────────────────────────────────────────────────────────────
+python-ulid>=3.1.0
+
+# ── HTTP client (CLI + internal calls) ─────────────────────────────────────
+httpx>=0.28.0
+
+# ── CLI ────────────────────────────────────────────────────────────────────
+typer>=0.9.0
+rich>=13.0.0
+
+# ── Hardware detection ──────────────────────────────────────────────────────
+# torch is already installed system-wide; listed here for documentation
+# pip install torch  (version depends on CUDA version — install separately)
+
+# ── Testing ─────────────────────────────────────────────────────────────────
+pytest>=7.0.0
+pytest-asyncio>=0.21.0

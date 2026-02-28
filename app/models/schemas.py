@@ -268,6 +268,24 @@ class CodexSearchResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Execution result
+# ---------------------------------------------------------------------------
+
+class ExecutionResult(BaseModel):
+    """
+    Structured output from ModelExecutor.run().
+    Carries everything the execution loop needs to grade, log, and escalate.
+    """
+    decision:          RoutingDecision
+    response_text:     str
+    tokens_generated:  Optional[int] = None
+    tokens_per_second: Optional[float] = None
+    duration_ms:       Optional[int] = None
+    retry_count:       int = 0
+    escalation_count:  int = 0
+
+
+# ---------------------------------------------------------------------------
 # Escalation
 # ---------------------------------------------------------------------------
 
