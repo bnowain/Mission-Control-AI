@@ -70,12 +70,12 @@ class TestSchemaV8:
         assert "archived_at" in cols
 
     def test_schema_version_is_8(self, db_conn):
-        """Schema version must be 8 after init + migrations."""
+        """Schema version must be >= 8 after init + migrations."""
         row = db_conn.execute(
             "SELECT version FROM schema_version ORDER BY applied_at DESC LIMIT 1"
         ).fetchone()
         assert row is not None
-        assert row[0] == 8
+        assert row[0] >= 8
 
     def test_ocr_corrections_columns(self, db_conn):
         """ocr_corrections has required columns."""
@@ -537,8 +537,8 @@ class TestMigrationV8:
         """run_migrations creates all Phase 8 tables on a v7 database."""
         from app.database.init import init_db, run_migrations, get_connection, SCHEMA_VERSION
 
-        # Verify SCHEMA_VERSION is 8
-        assert SCHEMA_VERSION == 8
+        # Verify SCHEMA_VERSION is at least 8 (bumped to 9 in Phase 9)
+        assert SCHEMA_VERSION >= 8
 
         db_path = tmp_path / "test_v8_mig.db"
         init_db(db_path)

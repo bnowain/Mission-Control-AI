@@ -76,6 +76,11 @@ class ExecutionContext:
     force_tier: Optional[ContextTier] = None
     # Optional streaming callback: on_event(event_type, data) called at each step
     on_event: Optional[Callable[[str, dict], None]] = None
+    # Agent tool-use fields
+    tools: Optional[list] = None          # AGENT_TOOLS list; None = no tool use
+    agent_max_iterations: int = 50        # max tool-call rounds per executor call
+    agent_session_id: Optional[str] = None  # for ask_user / guardrail pause/resume
+    repo_map_tokens: int = 1024           # max tokens for repo map context injection (0 = disabled)
 
 
 @dataclass
@@ -93,6 +98,8 @@ class LoopResult:
     succeeded:      bool
     decision:       Optional[RoutingDecision] = None
     thinking_text:  Optional[str] = None
+    tool_calls_made: int = 0
+    agent_iterations: int = 0
 
 
 def _emit(ctx: "ExecutionContext", event_type: str, data: dict) -> None:
@@ -145,9 +152,10 @@ class ExecutionLoop:
         messages       = self._inject_codex_guidelines_into(ctx, messages)
 
         _emit(ctx, "started", {
-            "task_id":   ctx.task_id,
-            "task_type": ctx.task_type.value,
+            "task_id":    ctx.task_id,
+            "task_type":  ctx.task_type.value,
             "project_id": ctx.project_id,
+            "session_id": ctx.agent_session_id,
         })
 
         while loop_count < MAX_EXECUTION_LOOPS:
@@ -176,6 +184,22 @@ class ExecutionLoop:
                     retry_count=retry_count,
                     force_class=ctx.force_class,
                     force_tier=ctx.force_tier,
+                    tools=ctx.tools if ctx.tools else None,
+                    working_dir=ctx.working_dir,
+                    max_tool_iterations=ctx.agent_max_iterations,
+                    agent_session_id=ctx.agent_session_id,
+                    repo_map_tokens=ctx.repo_map_tokens,
+                    on_tool_call=lambda name, args, itr: _emit(ctx, "tool_call", {
+                        "tool_name": name, "tool_args": args, "iteration": itr,
+                    }),
+                    on_tool_result=lambda name, content, is_error, itr: _emit(ctx, "tool_result", {
+                        "tool_name": name, "content": content[:2000],
+                        "is_error": is_error, "iteration": itr,
+                    }),
+                    on_decision_required=lambda sid, payload, dtype, itr: _emit(ctx, "decision_required", {
+                        "session_id": sid, "payload": payload,
+                        "decision_type": dtype, "iteration": itr,
+                    }),
                 )
                 retry_count = result.retry_count
                 _emit(ctx, "model_response", {
@@ -260,6 +284,9 @@ class ExecutionLoop:
                 injected_chunk_hashes=ctx.injected_chunk_hashes or None,
                 rag_chunks_injected=ctx.rag_chunks_injected,
                 rag_source_ids=ctx.rag_source_ids or None,
+                validator_details=validation.details if validation.details else None,
+                actual_model=result.actual_model if result else None,
+                task_type=ctx.task_type.value,
             )
 
             # ── Step 5: Check pass/fail ───────────────────────────────
@@ -284,6 +311,8 @@ class ExecutionLoop:
                     succeeded=True,
                     decision=result.decision if result else None,
                     thinking_text=result.thinking_text if result else None,
+                    tool_calls_made=result.tool_calls_made if result else 0,
+                    agent_iterations=result.agent_iterations if result else 0,
                 )
 
             log.warning(
@@ -293,6 +322,10 @@ class ExecutionLoop:
                 loop=loop_count,
                 loops_remaining=MAX_EXECUTION_LOOPS - loop_count,
             )
+
+            # ── Step 6: Inject validation feedback for next iteration ──
+            _inject_validation_feedback(messages, validation, grading)
+
             retry_count += 1
 
         # ── Loop limit hit ────────────────────────────────────────────
@@ -380,6 +413,55 @@ class ExecutionLoop:
         )
         ctx.injected_chunk_hashes = [g.id for g in guidelines]
         return augmented
+
+
+# ---------------------------------------------------------------------------
+# Validation feedback injection
+# ---------------------------------------------------------------------------
+
+def _inject_validation_feedback(
+    messages: list[dict],
+    validation,
+    grading,
+) -> None:
+    """
+    Append a user message describing which validators failed and their output.
+    Called before the next retry so the model can self-correct on concrete errors.
+    Only injects when there are actual details to report.
+    """
+    if not validation.details:
+        return
+
+    # Map detail key → ValidationResult attribute name
+    _attr_map = {
+        "compile":  "compile_success",
+        "tests":    "tests_passed",
+        "lint":     "lint_passed",
+        "runtime":  "runtime_success",
+    }
+
+    failed_checks = []
+    for check, output in validation.details.items():
+        attr = _attr_map.get(check)
+        passed = getattr(validation, attr, True) if attr else True
+        if not passed:
+            failed_checks.append((check, output))
+
+    if not failed_checks:
+        return  # Nothing actually failed — nothing to inject
+
+    lines = ["Your previous attempt failed validation:"]
+    for check, output in failed_checks:
+        lines.append(f"- {check}: FAILED")
+        if output and output != f"stub — {check} validation not yet implemented":
+            lines.append(f"  Output: {output[:500]}")
+    lines.append("Fix these specific issues in your next attempt.")
+
+    messages.append({"role": "user", "content": "\n".join(lines)})
+    log.info(
+        "Validation feedback injected",
+        failed_checks=[c for c, _ in failed_checks],
+    )
 
 
 # ---------------------------------------------------------------------------

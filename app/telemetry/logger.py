@@ -28,6 +28,8 @@ from app.models.schemas import GradingResult, RoutingDecision
 
 log = get_logger("telemetry")
 
+_MAX_DETAIL_CHARS = 2000
+
 
 # ---------------------------------------------------------------------------
 # Stack trace hashing (n8n pattern)
@@ -76,12 +78,24 @@ class TelemetryLogger:
         injected_chunk_hashes: Optional[list[str]] = None,
         rag_chunks_injected: int = 0,
         rag_source_ids: Optional[list[str]] = None,
+        validator_details: Optional[dict] = None,
+        actual_model: Optional[str] = None,
+        task_type: Optional[str] = None,
     ) -> str:
         """
         Write a telemetry record. Returns the new execution_log id (ULID).
         """
         log_id = str(ULID())
         stack_hash = hash_stack_trace(exc) if exc is not None else None
+
+        # Truncate individual detail values before serialising
+        validator_details_json: Optional[str] = None
+        if validator_details:
+            truncated = {
+                k: v[:_MAX_DETAIL_CHARS] if isinstance(v, str) else v
+                for k, v in validator_details.items()
+            }
+            validator_details_json = json.dumps(truncated)
 
         conn = get_connection()
         try:
@@ -115,6 +129,7 @@ class TelemetryLogger:
                     duration_ms, routing_reason, stack_trace_hash,
                     prompt_id, prompt_version, injected_chunk_hashes,
                     rag_chunks_injected, rag_source_ids,
+                    validator_details, actual_model,
                     created_at
                 ) VALUES (
                     ?, ?, ?, ?,
@@ -125,6 +140,7 @@ class TelemetryLogger:
                     ?, ?,
                     ?, ?, ?,
                     ?, ?, ?,
+                    ?, ?,
                     ?, ?,
                     ?
                 )
@@ -157,6 +173,8 @@ class TelemetryLogger:
                     json.dumps(injected_chunk_hashes) if injected_chunk_hashes else None,
                     rag_chunks_injected,
                     json.dumps(rag_source_ids) if rag_source_ids else None,
+                    validator_details_json,
+                    actual_model,
                     datetime.now(timezone.utc).isoformat(),
                 ),
             )
@@ -174,7 +192,48 @@ class TelemetryLogger:
             retries=grading.retry_count,
             duration_ms=duration_ms,
         )
+
+        # Update routing_stats after logging (best-effort)
+        if task_type:
+            self._update_routing_stats(model_id=model_id, task_type=task_type)
+
         return log_id
+
+    def _update_routing_stats(self, model_id: str, task_type: str) -> None:
+        """Upsert routing_stats with latest aggregated data from execution_logs."""
+        conn = get_connection()
+        try:
+            row = conn.execute(
+                """
+                SELECT AVG(e.score), AVG(e.retries),
+                       AVG(CASE WHEN e.passed THEN 1.0 ELSE 0.0 END), COUNT(*)
+                FROM execution_logs e
+                JOIN tasks t ON e.task_id = t.id
+                WHERE e.model_id = ? AND t.task_type = ?
+                """,
+                (model_id, task_type),
+            ).fetchone()
+            if row and row[3] > 0:
+                conn.execute(
+                    """
+                    INSERT INTO routing_stats
+                        (id, model_id, task_type,
+                         average_score, average_retries, success_rate, sample_size, last_updated)
+                    VALUES (hex(randomblob(16)), ?, ?, ?, ?, ?, ?, datetime('now'))
+                    ON CONFLICT(model_id, task_type) DO UPDATE SET
+                        average_score   = excluded.average_score,
+                        average_retries = excluded.average_retries,
+                        success_rate    = excluded.success_rate,
+                        sample_size     = excluded.sample_size,
+                        last_updated    = excluded.last_updated
+                    """,
+                    (model_id, task_type, row[0], row[1], row[2], row[3]),
+                )
+                conn.commit()
+        except Exception as e:
+            log.warning("routing_stats update failed", exc=str(e))
+        finally:
+            conn.close()
 
     def log_failure_event(
         self,

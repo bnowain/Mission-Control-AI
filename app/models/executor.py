@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import re
 import time
-from typing import Optional
+from typing import Callable, Optional
 
 from app.core.exceptions import ContextEscalationRequired, FatalError
 from app.core.logging import get_logger
@@ -86,6 +86,15 @@ class ModelExecutor:
         force_tier: Optional[ContextTier] = None,
         force_class: Optional[CapabilityClass] = None,
         max_retries: int = DEFAULT_MAX_RETRIES,
+        # Agent tool-use parameters (all optional — None = standard non-agent mode)
+        tools: Optional[list] = None,
+        working_dir: Optional[str] = None,
+        max_tool_iterations: int = 50,
+        agent_session_id: Optional[str] = None,
+        on_tool_call: Optional[Callable] = None,
+        on_tool_result: Optional[Callable] = None,
+        on_decision_required: Optional[Callable] = None,
+        repo_map_tokens: int = 1024,
     ) -> ExecutionResult:
         """
         Execute a model call with retry + context escalation.
@@ -108,6 +117,28 @@ class ModelExecutor:
             MaxRetriesExceeded      if retryable errors persist past max_retries.
         """
         router = self._get_router()
+
+        # ── Agent mode: tools + working_dir provided ──────────────────────
+        if tools and working_dir:
+            return self._run_agent(
+                task_id=task_id,
+                task_type=task_type,
+                messages=messages,
+                retry_count=retry_count,
+                force_tier=force_tier,
+                force_class=force_class,
+                tools=tools,
+                working_dir=working_dir,
+                max_tool_iterations=max_tool_iterations,
+                agent_session_id=agent_session_id,
+                on_tool_call=on_tool_call,
+                on_tool_result=on_tool_result,
+                on_decision_required=on_decision_required,
+                repo_map_tokens=repo_map_tokens,
+                router=router,
+            )
+
+        # ── Standard mode: single model call with retry + escalation ─────
         escalation_count = 0
         current_tier = force_tier
         current_class = force_class
@@ -166,6 +197,120 @@ class ModelExecutor:
                 retry_count=retry_count,
                 escalation_count=escalation_count,
             )
+
+    # ------------------------------------------------------------------
+    # Agent mode
+    # ------------------------------------------------------------------
+
+    def _run_agent(
+        self,
+        task_id: str,
+        task_type: TaskType,
+        messages: list[dict],
+        retry_count: int,
+        force_tier: Optional[ContextTier],
+        force_class: Optional[CapabilityClass],
+        tools: list,
+        working_dir: str,
+        max_tool_iterations: int,
+        agent_session_id: Optional[str],
+        on_tool_call: Optional[Callable],
+        on_tool_result: Optional[Callable],
+        on_decision_required: Optional[Callable],
+        repo_map_tokens: int,
+        router: "AdaptiveRouter",
+    ) -> "ExecutionResult":
+        """
+        Run the model in tool-call loop mode.
+        Uses the agent system prompt + AGENT_TOOLS.
+        No retry/escalation wrapper — each router.complete() call in the loop
+        is a direct call. Context escalation is not supported in agent mode.
+        """
+        from app.tools.definitions import AGENT_SYSTEM_PROMPT
+        from app.tools.executor import ToolExecutor
+        from app.tools.loop import run_agent_loop
+
+        # Prepend agent system prompt
+        has_system = any(m.get("role") == "system" for m in messages)
+        agent_messages = list(messages)
+        if not has_system:
+            agent_messages = [{"role": "system", "content": AGENT_SYSTEM_PROMPT}] + agent_messages
+
+        # Inject repo map context (graceful degradation on any failure)
+        if repo_map_tokens > 0:
+            try:
+                from app.tools.repomap import generate_repo_map
+                repo_map = generate_repo_map(working_dir, max_tokens=repo_map_tokens)
+                if repo_map:
+                    # Insert user/assistant pair after system message, before user prompt.
+                    # This pattern gives better model attention than appending to system.
+                    insert_idx = 1 if has_system or not messages else 1
+                    agent_messages.insert(
+                        insert_idx,
+                        {"role": "user", "content": f"Here is a map of the workspace:\n\n{repo_map}"},
+                    )
+                    agent_messages.insert(
+                        insert_idx + 1,
+                        {"role": "assistant", "content": "Thank you, I'll use this to navigate the codebase efficiently."},
+                    )
+                    log.debug("Repo map injected", task_id=task_id, tokens_approx=repo_map_tokens)
+            except Exception as exc:
+                log.warning("Repo map generation failed — continuing without it", exc=str(exc))
+
+        # Select routing decision
+        decision = router.select(
+            task_type=task_type,
+            retry_count=retry_count,
+            force_tier=force_tier,
+            force_class=force_class,
+        )
+
+        # Set up sandbox executor
+        try:
+            tool_executor = ToolExecutor(working_dir)
+        except ValueError as exc:
+            raise FatalError(
+                f"Cannot create agent executor: {exc}", original_exc=exc
+            )
+
+        start = time.perf_counter()
+
+        loop_result = run_agent_loop(
+            router=router,
+            decision=decision,
+            messages=agent_messages,
+            tools=tools,
+            tool_executor=tool_executor,
+            max_iterations=max_tool_iterations,
+            on_tool_call=on_tool_call,
+            on_tool_result=on_tool_result,
+            on_decision_required=on_decision_required,
+            session_id=agent_session_id,
+        )
+
+        elapsed_ms = int((time.perf_counter() - start) * 1000)
+
+        log.info(
+            "Agent loop complete",
+            task_id=task_id,
+            tool_calls=loop_result.tool_calls_made,
+            iterations=loop_result.iterations,
+            duration_ms=elapsed_ms,
+        )
+
+        return ExecutionResult(
+            decision=decision,
+            response_text=loop_result.response_text,
+            thinking_text=loop_result.thinking_text,
+            tokens_in=None,
+            tokens_generated=None,
+            tokens_per_second=None,
+            duration_ms=elapsed_ms,
+            retry_count=retry_count,
+            escalation_count=0,
+            tool_calls_made=loop_result.tool_calls_made,
+            agent_iterations=loop_result.iterations,
+        )
 
     # ------------------------------------------------------------------
     # Async
@@ -273,6 +418,7 @@ def _build_result(
     tokens_generated: int | None = None
     tokens_per_second: float | None = None
     thinking_text: str | None = None
+    actual_model: str | None = None
 
     if hasattr(response, "choices") and response.choices:
         msg = response.choices[0].message
@@ -281,6 +427,10 @@ def _build_result(
         # Check for reasoning_content (DeepSeek-R1 via LiteLLM)
         if hasattr(msg, "reasoning_content") and msg.reasoning_content:
             thinking_text = msg.reasoning_content
+
+    # Capture actual model name from LiteLLM response (guard against mock objects)
+    if hasattr(response, "model") and isinstance(response.model, str) and response.model:
+        actual_model = response.model
 
     # Check for <think> blocks in response text
     clean_text, think_block = _extract_thinking(response_text)
@@ -308,6 +458,9 @@ def _build_result(
         duration_ms=elapsed_ms,
         retry_count=retry_count,
         escalation_count=escalation_count,
+        tool_calls_made=0,
+        agent_iterations=0,
+        actual_model=actual_model,
     )
 
 

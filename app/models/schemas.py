@@ -290,6 +290,9 @@ class ExecutionResult(BaseModel):
     duration_ms:       Optional[int] = None
     retry_count:       int = 0
     escalation_count:  int = 0
+    tool_calls_made:   int = 0                 # total tool calls in agent loop
+    agent_iterations:  int = 0                 # agent loop iterations
+    actual_model:      Optional[str] = None    # real model name from LiteLLM response
 
 
 # ---------------------------------------------------------------------------
@@ -470,6 +473,80 @@ class CodexStatsResponse(BaseModel):
     project_codex_count: int
     candidate_count: int
     promoted_count: int
+
+
+# ---------------------------------------------------------------------------
+# API — Agent endpoints
+# ---------------------------------------------------------------------------
+
+class AgentRunRequest(BaseModel):
+    """POST /agent/run and POST /agent/run/stream"""
+    prompt: str
+    working_dir: str
+    project_id: str = "default"
+    task_type: TaskType = TaskType.GENERIC
+    force_model_class: Optional[CapabilityClass] = None
+    force_context_tier: Optional[ContextTier] = None
+    max_iterations: int = Field(default=50, ge=1, le=200)
+    tools_enabled: bool = True
+    repo_map_tokens: int = Field(default=1024, ge=0, le=8192)
+
+
+class AgentRunResponse(BaseModel):
+    """Response from POST /agent/run."""
+    task_id: str
+    task_status: TaskStatus
+    score: Optional[float] = None
+    passed: Optional[bool] = None
+    response_text: str
+    routing_decision: RoutingDecision
+    duration_ms: Optional[int] = None
+    retry_count: int = 0
+    loop_count: int = 1
+    tokens_generated: Optional[int] = None
+    tokens_per_second: Optional[float] = None
+    thinking_text: Optional[str] = None
+    tool_calls_made: int = 0
+    agent_iterations: int = 0
+    compile_success: Optional[bool] = None
+    tests_passed: Optional[bool] = None
+    lint_passed: Optional[bool] = None
+    runtime_success: Optional[bool] = None
+
+
+class InterviewRequest(BaseModel):
+    """POST /agent/interview"""
+    prompt: str
+    working_dir: str
+    task_type: str = "generic"
+    use_llm: bool = False  # if True, also call LLM to generate extra questions
+
+
+class InterviewOption(BaseModel):
+    label: str
+    description: str
+
+
+class InterviewQuestion(BaseModel):
+    question: str
+    header: str
+    options: list[InterviewOption]
+
+
+class InterviewResponse(BaseModel):
+    """Response from POST /agent/interview"""
+    questions: list[InterviewQuestion]
+
+
+class AgentRespondRequest(BaseModel):
+    """POST /agent/{session_id}/respond"""
+    choice: str                        # "approve" | "deny" | "custom" | option label
+    message: Optional[str] = None      # optional free-text
+
+
+class AgentInjectRequest(BaseModel):
+    """POST /agent/{session_id}/inject"""
+    content: str = Field(..., min_length=1, max_length=4096)
 
 
 # ---------------------------------------------------------------------------

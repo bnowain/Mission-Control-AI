@@ -23,7 +23,7 @@ DB_PATH = Path(__file__).resolve().parents[2] / "database" / "mission_control.db
 # ---------------------------------------------------------------------------
 # Schema version — bump when making additive changes
 # ---------------------------------------------------------------------------
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 # ---------------------------------------------------------------------------
 # DDL
@@ -242,7 +242,7 @@ CREATE TABLE IF NOT EXISTS routing_stats (
     FOREIGN KEY (model_id) REFERENCES models(id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_routing_model_task ON routing_stats(model_id, task_type);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_routing_stats_model_task ON routing_stats(model_id, task_type);
 
 
 -- =========================================================
@@ -1206,6 +1206,27 @@ def run_migrations(db_path: Path = DB_PATH) -> None:
             conn.execute("INSERT INTO schema_version (version) VALUES (8)")
             logger.info("Migration v7→v8 applied: Phase 8 tables + archival columns")
 
+        # v8 → v9: add validator_details + actual_model columns to execution_logs;
+        #           add UNIQUE index on routing_stats for upsert support.
+        if current < 9:
+            for col_sql in (
+                "ALTER TABLE execution_logs ADD COLUMN validator_details TEXT",
+                "ALTER TABLE execution_logs ADD COLUMN actual_model TEXT",
+            ):
+                try:
+                    conn.execute(col_sql)
+                except Exception as e:
+                    logger.debug("Migration v8→v9 column skipped: %s", e)
+            try:
+                conn.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_routing_stats_model_task "
+                    "ON routing_stats(model_id, task_type)"
+                )
+            except Exception as e:
+                logger.debug("Migration v8→v9 index skipped: %s", e)
+            conn.execute("INSERT INTO schema_version (version) VALUES (9)")
+            logger.info("Migration v8→v9 applied: validator_details, actual_model, routing_stats unique index")
+
         # Idempotent column guard — ensures columns added across all phase
         # migrations are present regardless of which migration path the DB
         # took (catches DBs created at a later schema version than when a
@@ -1214,6 +1235,8 @@ def run_migrations(db_path: Path = DB_PATH) -> None:
             ("execution_logs", "tokens_in", "INTEGER"),
             ("execution_logs", "rag_chunks_injected", "INTEGER DEFAULT 0"),
             ("execution_logs", "rag_source_ids", "TEXT"),
+            ("execution_logs", "validator_details", "TEXT"),
+            ("execution_logs", "actual_model", "TEXT"),
         ]
         for table, col, typedef in _ensure_columns:
             existing_cols = {
@@ -1225,6 +1248,21 @@ def run_migrations(db_path: Path = DB_PATH) -> None:
                     logger.info("Idempotent column added: %s.%s", table, col)
                 except Exception as e:
                     logger.debug("Column guard skipped %s.%s: %s", table, col, e)
+
+        # Idempotent index guard — ensures unique indexes exist regardless of
+        # which schema version path the DB took (handles fresh DBs initialized
+        # at a version where the migration block never ran).
+        _ensure_indexes = [
+            (
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_routing_stats_model_task "
+                "ON routing_stats(model_id, task_type)"
+            ),
+        ]
+        for idx_sql in _ensure_indexes:
+            try:
+                conn.execute(idx_sql)
+            except Exception as e:
+                logger.debug("Index guard skipped: %s", e)
 
         conn.commit()
     finally:
