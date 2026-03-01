@@ -63,7 +63,7 @@ class ReplayEngine:
             context_size=original["context_size"],
             context_tier=ContextTier(original["context_tier"]) if original["context_tier"] else ContextTier.EXECUTION,
             temperature=original["temperature"] or 0.1,
-            routing_reason="replay",
+            routing_reason=f"replay of {run_id}",
         )
 
         messages = [{"role": "user", "content": prompt_text}]
@@ -98,6 +98,10 @@ class ReplayEngine:
             retry_count=0,
         )
 
+        # Determine pass/fail booleans
+        original_passed = bool(original.get("passed")) if original.get("passed") is not None else None
+        task_type_str = original.get("task_type") or "generic"
+
         # Log the replay as a new execution_log row
         new_log_id = log_execution(
             task_id=original["task_id"],
@@ -109,6 +113,9 @@ class ReplayEngine:
             duration_ms=elapsed_ms,
             prompt_id=original.get("prompt_id"),
             prompt_version=original.get("prompt_version"),
+            original_prompt=prompt_text,
+            task_type=task_type_str,
+            validator_details=validation.details if validation.details else None,
         )
 
         log.info(
@@ -126,16 +133,25 @@ class ReplayEngine:
             context_size=original["context_size"],
             original_score=original.get("score"),
             new_score=grading.score,
+            original_passed=original_passed,
+            new_passed=grading.passed,
+            task_type=task_type_str,
             response_text=response_text,
             duration_ms=elapsed_ms,
+            validator_details=validation.details if validation.details else None,
         )
 
     def _load_log(self, run_id: str) -> Optional[dict]:
-        """Fetch execution_log row by id."""
+        """Fetch execution_log row joined with tasks for task_type."""
         conn = get_connection()
         try:
             row = conn.execute(
-                "SELECT * FROM execution_logs WHERE id = ?",
+                """
+                SELECT e.*, t.task_type
+                FROM execution_logs e
+                JOIN tasks t ON e.task_id = t.id
+                WHERE e.id = ?
+                """,
                 (run_id,),
             ).fetchone()
             return dict(row) if row else None
@@ -144,12 +160,18 @@ class ReplayEngine:
 
     def _load_prompt(self, log_row: dict) -> str:
         """
-        Load the original prompt text.
-        Falls back to a generic replay prompt if prompt_registry entry not found.
+        Load the original prompt text using three-tier priority:
+        1. original_prompt stored in the log row (v10+)
+        2. prompt_registry lookup via prompt_id
+        3. Generic fallback (logged as warning)
         """
-        prompt_id = log_row.get("prompt_id")
-        prompt_version = log_row.get("prompt_version")
+        # Tier 1: stored original prompt (schema v10)
+        stored = log_row.get("original_prompt")
+        if stored:
+            return stored
 
+        # Tier 2: prompt_registry lookup
+        prompt_id = log_row.get("prompt_id")
         if prompt_id:
             conn = get_connection()
             try:
@@ -162,7 +184,12 @@ class ReplayEngine:
             finally:
                 conn.close()
 
-        # Fallback: generic replay prompt
+        # Tier 3: generic fallback
+        log.warning(
+            "Replay prompt not found; using generic fallback",
+            run_id=log_row.get("id"),
+            prompt_id=prompt_id,
+        )
         return (
             f"[Replay of execution {log_row['id']}]\n"
             f"Task type: {log_row.get('task_type', 'unknown')}\n"

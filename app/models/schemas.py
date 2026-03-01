@@ -766,14 +766,18 @@ class WorkingSetResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 class ReplayResponse(BaseModel):
-    original_run_id:  str
-    new_run_id:       str
-    model_id:         str
-    context_size:     int
-    original_score:   Optional[float] = None
-    new_score:        Optional[float] = None
-    response_text:    str
-    duration_ms:      Optional[int] = None
+    original_run_id:   str
+    new_run_id:        str
+    model_id:          str
+    context_size:      int
+    original_score:    Optional[float] = None
+    new_score:         Optional[float] = None
+    original_passed:   Optional[bool] = None
+    new_passed:        Optional[bool] = None
+    task_type:         Optional[str] = None
+    response_text:     str
+    duration_ms:       Optional[int] = None
+    validator_details: Optional[dict] = None
 
 
 # ---------------------------------------------------------------------------

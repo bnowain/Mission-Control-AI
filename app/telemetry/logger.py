@@ -81,6 +81,7 @@ class TelemetryLogger:
         validator_details: Optional[dict] = None,
         actual_model: Optional[str] = None,
         task_type: Optional[str] = None,
+        original_prompt: Optional[str] = None,
     ) -> str:
         """
         Write a telemetry record. Returns the new execution_log id (ULID).
@@ -128,6 +129,7 @@ class TelemetryLogger:
                     human_intervention, downstream_impact,
                     duration_ms, routing_reason, stack_trace_hash,
                     prompt_id, prompt_version, injected_chunk_hashes,
+                    original_prompt,
                     rag_chunks_injected, rag_source_ids,
                     validator_details, actual_model,
                     created_at
@@ -140,6 +142,7 @@ class TelemetryLogger:
                     ?, ?,
                     ?, ?, ?,
                     ?, ?, ?,
+                    ?,
                     ?, ?,
                     ?, ?,
                     ?
@@ -171,6 +174,7 @@ class TelemetryLogger:
                     prompt_id,
                     prompt_version,
                     json.dumps(injected_chunk_hashes) if injected_chunk_hashes else None,
+                    original_prompt,
                     rag_chunks_injected,
                     json.dumps(rag_source_ids) if rag_source_ids else None,
                     validator_details_json,

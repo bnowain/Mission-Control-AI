@@ -142,10 +142,74 @@ def task_replay(
 ) -> None:
     """Exact replay of a previous execution run."""
     client = ctx.obj["client"]
-    from cli.output import is_json_mode, print_dict, print_json
+    from cli.output import is_json_mode, print_json
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.table import Table
 
-    result = client.post(f"/runs/{run_id}/replay")
+    result = client.post_execute(f"/runs/{run_id}/replay")
     if is_json_mode():
         print_json(result)
         return
-    print_dict("Replay Result", result)
+
+    console = Console()
+
+    orig_score  = result.get("original_score")
+    new_score   = result.get("new_score")
+    orig_passed = result.get("original_passed")
+    new_passed  = result.get("new_passed")
+    task_type   = result.get("task_type", "unknown")
+    duration_ms = result.get("duration_ms")
+    model_id    = result.get("model_id", "unknown")
+
+    # Score delta
+    if orig_score is not None and new_score is not None:
+        delta = new_score - orig_score
+        delta_str = f"[green]+{delta:.1f}[/green]" if delta >= 0 else f"[red]{delta:.1f}[/red]"
+    else:
+        delta_str = "n/a"
+
+    def _pass_label(v) -> str:
+        if v is True:
+            return "[green]PASS[/green]"
+        if v is False:
+            return "[red]FAIL[/red]"
+        return "n/a"
+
+    table = Table(show_header=True, header_style="bold cyan", box=None)
+    table.add_column("", style="bold")
+    table.add_column("Original", justify="right")
+    table.add_column("Replay", justify="right")
+    table.add_column("Delta", justify="right")
+
+    table.add_row(
+        "Score",
+        f"{orig_score:.1f}" if orig_score is not None else "n/a",
+        f"{new_score:.1f}" if new_score is not None else "n/a",
+        delta_str,
+    )
+    table.add_row(
+        "Passed",
+        _pass_label(orig_passed),
+        _pass_label(new_passed),
+        "",
+    )
+
+    meta_lines = (
+        f"[bold]Model:[/bold] {model_id}  "
+        f"[bold]Task type:[/bold] {task_type}  "
+        f"[bold]Duration:[/bold] {duration_ms}ms\n"
+        f"[bold]Original run:[/bold] {result.get('original_run_id')}  "
+        f"[bold]New run:[/bold] {result.get('new_run_id')}"
+    )
+
+    response_preview = (result.get("response_text") or "")[:300]
+    if response_preview:
+        response_preview = f"\n[bold]Response preview:[/bold]\n{response_preview}"
+
+    console.print(Panel(
+        f"{meta_lines}\n" + response_preview,
+        title="[bold blue]Replay Complete[/bold blue]",
+        expand=False,
+    ))
+    console.print(table)

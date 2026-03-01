@@ -46,6 +46,8 @@ from app.telemetry.logger import log_execution, log_failure
 
 log = get_logger("execution_loop")
 
+_MAX_PROMPT_CHARS = 10_000  # truncation limit for stored original_prompt
+
 MAX_EXECUTION_LOOPS: int = 10
 MAX_REPLAN_CYCLES:   int = 3
 
@@ -100,6 +102,24 @@ class LoopResult:
     thinking_text:  Optional[str] = None
     tool_calls_made: int = 0
     agent_iterations: int = 0
+
+
+def _extract_user_prompt(messages: list[dict]) -> Optional[str]:
+    """Return the first user-role message content, truncated to _MAX_PROMPT_CHARS."""
+    for msg in messages:
+        if msg.get("role") == "user":
+            content = msg.get("content", "")
+            if isinstance(content, str):
+                return content[:_MAX_PROMPT_CHARS]
+            # Handle structured content blocks (list of dicts with "text")
+            if isinstance(content, list):
+                parts = [
+                    block.get("text", "")
+                    for block in content
+                    if isinstance(block, dict) and block.get("type") == "text"
+                ]
+                return "".join(parts)[:_MAX_PROMPT_CHARS]
+    return None
 
 
 def _emit(ctx: "ExecutionContext", event_type: str, data: dict) -> None:
@@ -287,6 +307,7 @@ class ExecutionLoop:
                 validator_details=validation.details if validation.details else None,
                 actual_model=result.actual_model if result else None,
                 task_type=ctx.task_type.value,
+                original_prompt=_extract_user_prompt(messages),
             )
 
             # ── Step 5: Check pass/fail ───────────────────────────────

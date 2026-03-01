@@ -23,7 +23,7 @@ DB_PATH = Path(__file__).resolve().parents[2] / "database" / "mission_control.db
 # ---------------------------------------------------------------------------
 # Schema version — bump when making additive changes
 # ---------------------------------------------------------------------------
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 # ---------------------------------------------------------------------------
 # DDL
@@ -170,6 +170,7 @@ CREATE TABLE IF NOT EXISTS execution_logs (
     prompt_id             TEXT,                     -- FK → prompt_registry
     prompt_version        TEXT,                     -- snapshot of version string
     injected_chunk_hashes TEXT,                     -- JSON array of chunk SHA256s
+    original_prompt       TEXT,                     -- Phase 10 (schema v10): user prompt stored for exact replay
 
     -- Phase 7 RAG telemetry
     rag_chunks_injected   INTEGER DEFAULT 0,        -- count of RAG chunks prepended
@@ -1227,6 +1228,17 @@ def run_migrations(db_path: Path = DB_PATH) -> None:
             conn.execute("INSERT INTO schema_version (version) VALUES (9)")
             logger.info("Migration v8→v9 applied: validator_details, actual_model, routing_stats unique index")
 
+        # v9 → v10: add original_prompt column to execution_logs for exact replay.
+        if current < 10:
+            try:
+                conn.execute(
+                    "ALTER TABLE execution_logs ADD COLUMN original_prompt TEXT"
+                )
+            except Exception as e:
+                logger.debug("Migration v9→v10 column skipped: %s", e)
+            conn.execute("INSERT INTO schema_version (version) VALUES (10)")
+            logger.info("Migration v9→v10 applied: original_prompt added to execution_logs")
+
         # Idempotent column guard — ensures columns added across all phase
         # migrations are present regardless of which migration path the DB
         # took (catches DBs created at a later schema version than when a
@@ -1237,6 +1249,7 @@ def run_migrations(db_path: Path = DB_PATH) -> None:
             ("execution_logs", "rag_source_ids", "TEXT"),
             ("execution_logs", "validator_details", "TEXT"),
             ("execution_logs", "actual_model", "TEXT"),
+            ("execution_logs", "original_prompt", "TEXT"),
         ]
         for table, col, typedef in _ensure_columns:
             existing_cols = {

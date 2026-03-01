@@ -106,12 +106,12 @@ class TestSchemaV9:
         assert "idx_routing_stats_model_task" in indexes
 
     def test_schema_version_is_9(self, db_conn):
-        """Schema version must be 9 after init + migrations."""
+        """Schema version must be >= 9 after init + migrations."""
         row = db_conn.execute(
             "SELECT version FROM schema_version ORDER BY applied_at DESC LIMIT 1"
         ).fetchone()
         assert row is not None
-        assert row[0] == 9
+        assert row[0] >= 9
 
 
 # ===========================================================================
