@@ -39,7 +39,7 @@ def sql_cmd(
 def _run_query(client, query: str, write: bool = False) -> None:
     from cli.output import is_json_mode, print_json, print_table, print_dict
 
-    body: dict = {"query": query}
+    body: dict = {"sql": query}
     if write:
         body["write_mode"] = True
 

@@ -1206,6 +1206,26 @@ def run_migrations(db_path: Path = DB_PATH) -> None:
             conn.execute("INSERT INTO schema_version (version) VALUES (8)")
             logger.info("Migration v7→v8 applied: Phase 8 tables + archival columns")
 
+        # Idempotent column guard — ensures columns added across all phase
+        # migrations are present regardless of which migration path the DB
+        # took (catches DBs created at a later schema version than when a
+        # column was introduced).
+        _ensure_columns = [
+            ("execution_logs", "tokens_in", "INTEGER"),
+            ("execution_logs", "rag_chunks_injected", "INTEGER DEFAULT 0"),
+            ("execution_logs", "rag_source_ids", "TEXT"),
+        ]
+        for table, col, typedef in _ensure_columns:
+            existing_cols = {
+                r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()
+            }
+            if col not in existing_cols:
+                try:
+                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {typedef}")
+                    logger.info("Idempotent column added: %s.%s", table, col)
+                except Exception as e:
+                    logger.debug("Column guard skipped %s.%s: %s", table, col, e)
+
         conn.commit()
     finally:
         conn.close()

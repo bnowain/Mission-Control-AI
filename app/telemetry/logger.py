@@ -85,6 +85,24 @@ class TelemetryLogger:
 
         conn = get_connection()
         try:
+            # Auto-register model if not already in models table (handles
+            # capability-class names like "fast_model" when no real model
+            # is configured, as well as any unregistered model strings).
+            model_id = decision.selected_model
+            _CAPABILITY_CLASSES = {
+                "fast_model", "coder_model", "reasoning_model", "planner_model",
+            }
+            provider = model_id.split("/")[0] if "/" in model_id else "unknown"
+            cap_class = (
+                model_id if model_id in _CAPABILITY_CLASSES else "fast_model"
+            )
+            conn.execute(
+                """INSERT OR IGNORE INTO models
+                   (id, display_name, provider, capability_class)
+                   VALUES (?, ?, ?, ?)""",
+                (model_id, model_id, provider, cap_class),
+            )
+
             conn.execute(
                 """
                 INSERT INTO execution_logs (
@@ -115,7 +133,7 @@ class TelemetryLogger:
                     log_id,
                     task_id,
                     project_id,
-                    decision.selected_model,
+                    model_id,
                     decision.context_size,
                     decision.context_tier.value,
                     decision.temperature,
