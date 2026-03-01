@@ -20,6 +20,8 @@ from __future__ import annotations
 
 import json
 import os
+import random
+import time
 from pathlib import Path
 from typing import Any, Optional
 
@@ -39,6 +41,31 @@ log = get_logger("router")
 
 CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "models.json"
 EXAMPLE_CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "models.example.json"
+
+# Adaptive routing thresholds
+_ADAPTIVE_MIN_SAMPLES = 30           # need 30+ for CLT-valid statistical reliability
+_ADAPTIVE_IMPROVEMENT_THRESHOLD = 0.15  # 15 percentage points better to override
+_ADAPTIVE_WINDOW_DAYS = 30           # only consider last 30 days of execution data
+_ADAPTIVE_EPSILON = 0.05             # 5% chance to use rule-based for exploration
+
+# ---------------------------------------------------------------------------
+# Feature-flag TTL cache — avoids a DB hit on every select() call
+# ---------------------------------------------------------------------------
+
+_flag_cache: dict[str, tuple[bool, float]] = {}
+_FLAG_CACHE_TTL = 60.0  # seconds
+
+
+def _is_flag_enabled(flag_name: str) -> bool:
+    """Return flag value with a 60-second TTL cache to avoid per-call DB hits."""
+    now = time.monotonic()
+    cached = _flag_cache.get(flag_name)
+    if cached and now < cached[1]:
+        return cached[0]
+    from app.core.feature_flags import is_feature_enabled
+    val = is_feature_enabled(flag_name)
+    _flag_cache[flag_name] = (val, now + _FLAG_CACHE_TTL)
+    return val
 
 # Hard-coded routing rules: task_type → minimum capability class
 # Code tasks route to CODER_MODEL; general tasks to FAST_MODEL.
@@ -186,6 +213,112 @@ class AdaptiveRouter:
         )
 
     # ------------------------------------------------------------------
+    # Adaptive routing (data-driven overrides)
+    # ------------------------------------------------------------------
+
+    def _load_stats_for_task(self, task_type: TaskType) -> list[dict]:
+        """
+        Query execution_logs (JOIN tasks) for all models with enough samples in
+        the last _ADAPTIVE_WINDOW_DAYS days for this task type.
+
+        Uses the raw execution log rather than the pre-aggregated routing_stats
+        table so that stale historical data is automatically excluded by the
+        time window, and fresh data is always reflected immediately.
+
+        Returns empty list on any error (graceful degradation).
+        """
+        from app.database.init import get_connection
+        try:
+            conn = get_connection()
+            try:
+                rows = conn.execute(
+                    f"""
+                    SELECT e.model_id,
+                           AVG(CASE WHEN e.passed THEN 1.0 ELSE 0.0 END) AS success_rate,
+                           COUNT(*) AS sample_size
+                    FROM execution_logs e
+                    JOIN tasks t ON e.task_id = t.id
+                    WHERE t.task_type = ?
+                      AND e.created_at >= datetime('now', '-{_ADAPTIVE_WINDOW_DAYS} days')
+                    GROUP BY e.model_id
+                    HAVING COUNT(*) >= ?
+                    """,
+                    (task_type.value, _ADAPTIVE_MIN_SAMPLES),
+                ).fetchall()
+                return [dict(r) for r in rows]
+            finally:
+                conn.close()
+        except Exception as exc:
+            log.warning("Failed to load routing stats", exc=str(exc))
+            return []
+
+    def _adaptive_select(
+        self, task_type: TaskType, base_class: CapabilityClass
+    ) -> Optional[CapabilityClass]:
+        """
+        Check execution_logs to see if a different capability class outperforms
+        the rule-based default by at least _ADAPTIVE_IMPROVEMENT_THRESHOLD.
+
+        Uses epsilon-greedy exploration: _ADAPTIVE_EPSILON (5%) of calls skip
+        adaptive logic and fall back to rule-based, ensuring losing models still
+        get evaluated over time.
+
+        Cold-start guard: if the default class has no data in the current window,
+        do not override (insufficient baseline to measure against).
+
+        Returns the better CapabilityClass, or None to keep the default.
+        """
+        # Epsilon-greedy: occasionally defer to rule-based for exploration
+        if random.random() < _ADAPTIVE_EPSILON:
+            return None
+
+        stats = self._load_stats_for_task(task_type)
+        if not stats:
+            return None
+
+        # Build model_id → success_rate mapping (single metric — avoids
+        # double-counting correlated success_rate and average_score)
+        model_rates: dict[str, float] = {
+            row["model_id"]: float(row["success_rate"] or 0.0)
+            for row in stats
+        }
+
+        # Cold-start guard: require baseline data for the default class
+        if base_class.value not in model_rates:
+            return None
+
+        default_rate = model_rates[base_class.value]
+
+        # Find best available alternative
+        best_class: Optional[CapabilityClass] = None
+        best_rate = default_rate
+        for model_id, rate in model_rates.items():
+            if model_id == base_class.value:
+                continue
+            try:
+                candidate = CapabilityClass(model_id)
+            except ValueError:
+                continue
+            if candidate not in self._available_classes:
+                continue
+            if rate > best_rate:
+                best_class = candidate
+                best_rate = rate
+
+        # Only override if improvement clears the threshold
+        if best_class is not None and (best_rate - default_rate) >= _ADAPTIVE_IMPROVEMENT_THRESHOLD:
+            log.info(
+                "Adaptive override",
+                task_type=task_type.value,
+                from_class=base_class.value,
+                to_class=best_class.value,
+                improvement=round(best_rate - default_rate, 3),
+            )
+            return best_class
+
+        return None
+
+    # ------------------------------------------------------------------
     # Routing decisions
     # ------------------------------------------------------------------
 
@@ -204,6 +337,16 @@ class AdaptiveRouter:
           - force_tier / force_class override (used after ContextEscalationRequired)
         """
         base_class = _TASK_ROUTING.get(task_type, CapabilityClass.FAST_MODEL)
+        original_base = base_class  # saved for reason string
+
+        # ── Adaptive override (data-driven) ─────────────────────────────────
+        adaptive_override = False
+        if force_class is None and retry_count < 3:
+            if _is_flag_enabled("adaptive_router_v2"):
+                override = self._adaptive_select(task_type, base_class)
+                if override is not None:
+                    base_class = override
+                    adaptive_override = True
 
         # Capability escalation on repeated retry
         capability = force_class or self._maybe_escalate_class(base_class, retry_count)
@@ -216,7 +359,10 @@ class AdaptiveRouter:
         tier = force_tier or self._tier_for_class(capability)
         context_size = CONTEXT_TIER_SIZES[tier]
 
-        reason = self._build_reason(task_type, base_class, capability, retry_count, force_class, force_tier)
+        reason = self._build_reason(
+            task_type, original_base, capability, retry_count,
+            force_class, force_tier, adaptive_override,
+        )
 
         log.info(
             "Routing decision",
@@ -309,11 +455,14 @@ class AdaptiveRouter:
         retries: int,
         force_class: Optional[CapabilityClass],
         force_tier: Optional[ContextTier],
+        adaptive_override: bool = False,
     ) -> str:
         if force_class:
             return f"forced to {force_class.value}"
         if force_tier:
             return f"context tier forced to {force_tier.value}"
+        if adaptive_override:
+            return f"adaptive: {selected.value} outperforms {base.value} for {task_type.value}"
         if selected != base:
             return f"escalated from {base.value} after {retries} retries"
         return f"task_type={task_type.value} maps to {base.value}"

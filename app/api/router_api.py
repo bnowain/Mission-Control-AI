@@ -4,6 +4,7 @@ Mission Control — Router API
 POST /router/select      → model selection decision
 GET  /router/stats       → routing stats from DB
 GET  /api/router/stats   → Atlas-exposed stats endpoint
+GET  /router/report      → periodic routing performance report
 """
 
 from fastapi import APIRouter
@@ -91,3 +92,21 @@ async def atlas_router_stats() -> RouterStatsResponse:
     Read-only summary of model routing performance.
     """
     return await run_in_thread(_get_stats_sync)
+
+
+# ---------------------------------------------------------------------------
+# Routing performance report
+# GET /router/report?window_days=30
+# ---------------------------------------------------------------------------
+
+@router.get("/router/report")
+async def routing_report(window_days: int = 30) -> dict:
+    """
+    Periodic routing performance report.
+
+    Compares model success rates by task type over the last ``window_days``
+    days and returns structured recommendations.  Paste the JSON response
+    into a conversation for analysis and routing suggestions.
+    """
+    from app.router.report import generate_routing_report
+    return await run_in_thread(generate_routing_report, window_days)
