@@ -1,0 +1,165 @@
+{
+  "_comment": "Copy to config/models.json and configure your actual models.",
+  "_comment2": "Never hardcode model names in application code — route by capability_class only.",
+  "_comment3": "Multiple deployments with the same model_name = LiteLLM picks by latency/availability.",
+
+  "routing_strategy": "latency-based-routing",
+
+  "deployments": [
+
+    "_tier0_comment: TIER 0 — FAST (general, non-code tasks: docs, generic)",
+
+    {
+      "capability_class": "fast_model",
+      "model_name": "fast_model",
+      "litellm_params": {
+        "model": "ollama/qwen2.5:7b",
+        "api_base": "http://localhost:11434"
+      }
+    },
+
+    "_tier0_coder_comment: TIER 0 — CODER (code tasks: bug_fix, file_edit, test_write, refactor_small)",
+
+    {
+      "capability_class": "coder_model",
+      "model_name": "coder_model",
+      "litellm_params": {
+        "model": "ollama/deepseek-coder-v2:16b",
+        "api_base": "http://localhost:11434"
+      }
+    },
+    {
+      "capability_class": "coder_model",
+      "model_name": "coder_model",
+      "_comment": "Fallback coder if deepseek-coder-v2:16b unavailable",
+      "litellm_params": {
+        "model": "ollama/qwen2.5-coder:7b",
+        "api_base": "http://localhost:11434"
+      }
+    },
+
+    "_tier1_comment: TIER 1 — REASONING (multi-file, refactors, complex analysis)",
+
+    {
+      "capability_class": "reasoning_model",
+      "model_name": "reasoning_model",
+      "litellm_params": {
+        "model": "ollama/qwen2.5:32b",
+        "api_base": "http://localhost:11434"
+      }
+    },
+    {
+      "capability_class": "reasoning_model",
+      "model_name": "reasoning_model",
+      "_comment": "DeepSeek R1 14B — fast reasoning, runs alongside coder model on 32GB VRAM",
+      "litellm_params": {
+        "model": "ollama/deepseek-r1:14b",
+        "api_base": "http://localhost:11434"
+      }
+    },
+
+    "_tier2_comment: TIER 2 — HEAVY LOCAL (optional — requires 70B+ model, 40GB+ VRAM). Comment out if not available.",
+
+    {
+      "capability_class": "heavy_model",
+      "model_name": "heavy_model",
+      "_comment": "Uncomment and set model when a 70B+ local model is available",
+      "_disabled": true,
+      "litellm_params": {
+        "model": "ollama/llama3:70b",
+        "api_base": "http://localhost:11434"
+      }
+    },
+
+    "_cloud_comment: CLOUD — PLANNER (architecture, replanning, meta-reasoning). All cloud usage is logged with model_source tag.)",
+
+    {
+      "capability_class": "planner_model",
+      "model_name": "planner_model",
+      "_comment": "Primary cloud planner — Anthropic Claude Opus 4.6",
+      "litellm_params": {
+        "model": "anthropic/claude-opus-4-6",
+        "api_key": "${ANTHROPIC_API_KEY}"
+      }
+    },
+    {
+      "capability_class": "planner_model",
+      "model_name": "planner_model",
+      "_comment": "DeepSeek Reasoner — chain-of-thought reasoning, cost-effective planner alternative",
+      "litellm_params": {
+        "model": "deepseek/deepseek-reasoner",
+        "api_key": "${DEEPSEEK_API_KEY}"
+      }
+    },
+    {
+      "capability_class": "planner_model",
+      "model_name": "planner_model",
+      "_comment": "OpenAI GPT-4.1 — current OpenAI API flagship (as of Feb 2026)",
+      "litellm_params": {
+        "model": "openai/gpt-4.1",
+        "api_key": "${OPENAI_API_KEY}"
+      }
+    },
+
+    "_cloud_reasoning_comment: CLOUD — REASONING FALLBACKS (when local reasoning fails, before escalating to planner)",
+
+    {
+      "capability_class": "reasoning_model",
+      "model_name": "reasoning_model",
+      "_comment": "DeepSeek Chat (V3.2) — strong general + code reasoning, cost-effective cloud fallback",
+      "litellm_params": {
+        "model": "deepseek/deepseek-chat",
+        "api_key": "${DEEPSEEK_API_KEY}"
+      }
+    },
+    {
+      "capability_class": "reasoning_model",
+      "model_name": "reasoning_model",
+      "_comment": "OpenAI GPT-4.1 Mini — fast cloud reasoning fallback",
+      "litellm_params": {
+        "model": "openai/gpt-4.1-mini",
+        "api_key": "${OPENAI_API_KEY}"
+      }
+    },
+
+    "_cloud_fast_comment: CLOUD — FAST FALLBACKS (when local fast model fails)",
+
+    {
+      "capability_class": "fast_model",
+      "model_name": "fast_model",
+      "_comment": "Claude Haiku 4.5 — fastest Anthropic model, cheap cloud fallback for utility tasks",
+      "litellm_params": {
+        "model": "anthropic/claude-haiku-4-5-20251001",
+        "api_key": "${ANTHROPIC_API_KEY}"
+      }
+    },
+    {
+      "capability_class": "fast_model",
+      "model_name": "fast_model",
+      "_comment": "OpenAI GPT-4.1 Nano — smallest/cheapest OpenAI option for utility tasks",
+      "litellm_params": {
+        "model": "openai/gpt-4.1-nano",
+        "api_key": "${OPENAI_API_KEY}"
+      }
+    }
+
+  ],
+
+  "fallbacks": [
+    {"fast_model":      ["reasoning_model", "planner_model"]},
+    {"coder_model":     ["reasoning_model", "planner_model"]},
+    {"reasoning_model": ["planner_model"]},
+    {"heavy_model":     ["planner_model"]}
+  ],
+
+  "context_tiers": {
+    "execution": 16384,
+    "hybrid":    24576,
+    "planning":  32768
+  },
+
+  "retry": {
+    "num_retries": 3,
+    "timeout_seconds": 60
+  }
+}

@@ -14,6 +14,7 @@ from fastapi import APIRouter, HTTPException
 
 from app.database.async_helpers import run_in_thread
 from app.database.init import get_connection
+from app.models.executor import _extract_thinking
 from app.models.schemas import (
     Model,
     ModelBenchmarkRequest,
@@ -63,8 +64,10 @@ def _run_model_sync(req: ModelRunRequest) -> ModelRunResponse:
     r = get_router()
     from app.models.schemas import ContextTier, RoutingDecision
     decision = RoutingDecision(
+        # context_size is divided by 4 in complete() to get the output token budget,
+        # so multiply by 4 here to ensure the LLM receives exactly req.max_tokens.
         selected_model=req.model_id,
-        context_size=req.max_tokens,
+        context_size=req.max_tokens * 4,
         context_tier=ContextTier.EXECUTION,
         temperature=req.temperature,
         routing_reason="direct /models/run call",
@@ -74,10 +77,21 @@ def _run_model_sync(req: ModelRunRequest) -> ModelRunResponse:
     elapsed_ms = int((time.perf_counter() - start) * 1000)
 
     text = ""
+    thinking_text = None
     tokens_in = None
     tokens_generated = None
     if hasattr(response, "choices") and response.choices:
-        text = response.choices[0].message.content or ""
+        msg = response.choices[0].message
+        raw = msg.content or ""
+        # DeepSeek-R1 and similar models put chain-of-thought in reasoning_content;
+        # message.content may be empty when all output is in reasoning_content.
+        if hasattr(msg, "reasoning_content") and msg.reasoning_content:
+            thinking_text = msg.reasoning_content
+        clean, think_block = _extract_thinking(raw)
+        if think_block:
+            thinking_text = (thinking_text + "\n\n" + think_block) if thinking_text else think_block
+            raw = clean
+        text = raw
     if hasattr(response, "usage") and response.usage:
         tokens_in = getattr(response.usage, "prompt_tokens", None)
         tokens_generated = getattr(response.usage, "completion_tokens", None)
@@ -85,6 +99,7 @@ def _run_model_sync(req: ModelRunRequest) -> ModelRunResponse:
     return ModelRunResponse(
         model_id=req.model_id,
         response_text=text,
+        thinking_text=thinking_text,
         tokens_in=tokens_in,
         tokens_generated=tokens_generated,
         duration_ms=elapsed_ms,

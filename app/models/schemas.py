@@ -61,12 +61,13 @@ class ContextTier(str, Enum):
 
 
 class ModelSource(str, Enum):
-    CLOUD_ANTHROPIC = "cloud:anthropic"
-    CLOUD_OPENAI    = "cloud:openai"
-    CLOUD_DEEPSEEK  = "cloud:deepseek"
-    LOCAL_OLLAMA    = "local:ollama"
-    LOCAL_VLLM      = "local:vllm"
-    HUMAN           = "human"
+    CLOUD_ANTHROPIC  = "cloud:anthropic"
+    CLOUD_OPENAI     = "cloud:openai"
+    CLOUD_DEEPSEEK   = "cloud:deepseek"
+    LOCAL_OLLAMA     = "local:ollama"
+    LOCAL_VLLM       = "local:vllm"
+    CLI_CLAUDE_CODE  = "cli:claude_code"
+    HUMAN            = "human"
 
 
 class ArtifactState(str, Enum):
@@ -282,6 +283,7 @@ class ExecutionResult(BaseModel):
     """
     decision:          RoutingDecision
     response_text:     str
+    thinking_text:     Optional[str] = None    # chain-of-thought (stripped before grading)
     tokens_in:         Optional[int] = None    # prompt tokens consumed
     tokens_generated:  Optional[int] = None    # completion tokens produced
     tokens_per_second: Optional[float] = None
@@ -412,6 +414,7 @@ class ModelRunRequest(BaseModel):
 class ModelRunResponse(BaseModel):
     model_id: str
     response_text: str
+    thinking_text: Optional[str] = None
     tokens_in: Optional[int] = None
     tokens_generated: Optional[int] = None
     duration_ms: Optional[int] = None

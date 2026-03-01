@@ -20,6 +20,7 @@ Hard limits enforced here:
 
 from __future__ import annotations
 
+import re
 import time
 from typing import Optional
 
@@ -246,6 +247,19 @@ class ModelExecutor:
 # Helpers
 # ---------------------------------------------------------------------------
 
+_THINK_RE = re.compile(r"<think>(.*?)</think>", re.DOTALL)
+
+
+def _extract_thinking(text: str) -> tuple[str, str | None]:
+    """Strip <think>...</think> blocks, return (clean_text, thinking_text)."""
+    matches = _THINK_RE.findall(text)
+    if not matches:
+        return text, None
+    thinking = "\n\n".join(m.strip() for m in matches)
+    clean = _THINK_RE.sub("", text).strip()
+    return clean, thinking
+
+
 def _build_result(
     response: object,
     decision,
@@ -258,10 +272,24 @@ def _build_result(
     tokens_in: int | None = None
     tokens_generated: int | None = None
     tokens_per_second: float | None = None
+    thinking_text: str | None = None
 
     if hasattr(response, "choices") and response.choices:
         msg = response.choices[0].message
         response_text = (msg.content or "") if hasattr(msg, "content") else ""
+
+        # Check for reasoning_content (DeepSeek-R1 via LiteLLM)
+        if hasattr(msg, "reasoning_content") and msg.reasoning_content:
+            thinking_text = msg.reasoning_content
+
+    # Check for <think> blocks in response text
+    clean_text, think_block = _extract_thinking(response_text)
+    if think_block:
+        if thinking_text:
+            thinking_text = thinking_text + "\n\n" + think_block
+        else:
+            thinking_text = think_block
+        response_text = clean_text
 
     if hasattr(response, "usage") and response.usage:
         usage = response.usage
@@ -273,6 +301,7 @@ def _build_result(
     return ExecutionResult(
         decision=decision,
         response_text=response_text,
+        thinking_text=thinking_text,
         tokens_in=tokens_in,
         tokens_generated=tokens_generated,
         tokens_per_second=tokens_per_second,

@@ -125,7 +125,10 @@ class AdaptiveRouter:
             )
 
         # Expand environment variable placeholders in litellm_params
+        # Skip string entries — the example config uses strings as inline comments
         for deployment in config.get("deployments", []):
+            if not isinstance(deployment, dict):
+                continue
             params = deployment.get("litellm_params", {})
             for key, val in params.items():
                 if isinstance(val, str) and val.startswith("${") and val.endswith("}"):
@@ -144,9 +147,22 @@ class AdaptiveRouter:
 
         model_list = []
         for deployment in self._config.get("deployments", []):
-            # Filter out deployments with missing api_key
+            # Skip string comment entries in deployments list
+            if not isinstance(deployment, dict):
+                continue
+            # Skip explicitly disabled deployments
+            if deployment.get("_disabled"):
+                continue
+            # Filter out cloud deployments with missing api_key.
+            # Cloud models use "provider/model" format (e.g. "anthropic/claude-opus-4-6").
+            # Local models use "ollama/..." or just a model name — never need api_key.
             params = deployment.get("litellm_params", {})
-            if params.get("api_key") is None and "anthropic" in params.get("model", ""):
+            api_key = params.get("api_key")
+            model_name = params.get("model", "")
+            # Detect cloud by prefix before the first slash
+            provider_prefix = model_name.split("/")[0] if "/" in model_name else ""
+            cloud_providers = {"anthropic", "openai", "deepseek"}
+            if api_key is None and provider_prefix in cloud_providers:
                 log.warning(
                     "Skipping deployment — API key not set",
                     model=deployment.get("model_name"),
@@ -355,9 +371,15 @@ _router_instance: Optional[AdaptiveRouter] = None
 
 
 def get_router() -> AdaptiveRouter:
-    """Return the initialised router singleton."""
+    """Return the initialised router singleton.
+
+    Only assigns the singleton AFTER initialise() succeeds, so a failed
+    initialisation doesn't leave a permanently broken instance.
+    On the next call it will retry from scratch.
+    """
     global _router_instance
     if _router_instance is None:
-        _router_instance = AdaptiveRouter()
-        _router_instance.initialise()
+        instance = AdaptiveRouter()
+        instance.initialise()       # raises on failure — _router_instance stays None
+        _router_instance = instance  # only set after successful init
     return _router_instance

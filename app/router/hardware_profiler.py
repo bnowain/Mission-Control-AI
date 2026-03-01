@@ -79,11 +79,24 @@ def detect_hardware() -> HardwareProfile:
     return _cached_profile
 
 
+def _ollama_reachable() -> bool:
+    """Return True if a local Ollama server is responding."""
+    try:
+        import urllib.request
+        urllib.request.urlopen("http://localhost:11434/api/tags", timeout=2)
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def available_capability_classes(profile: HardwareProfile) -> list[CapabilityClass]:
     """
     Return the list of capability classes this hardware can run locally.
-    Cloud models (planner_model via Anthropic API) are always available
-    regardless of VRAM — add them unconditionally.
+
+    VRAM thresholds apply when running models directly via CUDA/MPS.
+    When Ollama is reachable, Ollama manages its own memory — fast_model
+    and coder_model are always available (Ollama runs on CPU if needed).
+    Cloud planner is always available regardless of hardware.
     """
     vram = profile.vram_mb or 0
     classes = []
@@ -91,6 +104,14 @@ def available_capability_classes(profile: HardwareProfile) -> list[CapabilityCla
     for cls, threshold in _VRAM_THRESHOLDS.items():
         if vram >= threshold:
             classes.append(cls)
+
+    # If Ollama is reachable, fast and coder models are always available
+    # regardless of VRAM — Ollama handles its own memory management
+    if _ollama_reachable():
+        for cls in (CapabilityClass.FAST_MODEL, CapabilityClass.CODER_MODEL,
+                    CapabilityClass.REASONING_MODEL):
+            if cls not in classes:
+                classes.append(cls)
 
     # Cloud planner is always available (API-based, no VRAM required)
     if CapabilityClass.PLANNER_MODEL not in classes:

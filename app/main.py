@@ -33,6 +33,7 @@ from app.api.events_api import router as events_router
 from app.api.rag import router as rag_router
 from app.api.metrics import router as metrics_router
 from app.api.governance import router as governance_router
+from app.api.planner_api import router as planner_router
 from app.core.exceptions import MissionControlError
 from app.core.logging import configure_logging, get_logger
 from app.database.init import DB_PATH, init_db, run_migrations
@@ -44,13 +45,13 @@ log = get_logger("main")
 async def lifespan(app: FastAPI):
     """Startup and shutdown lifecycle."""
     configure_logging()
-    log.info("Mission Control starting", port=8860)
+    log.info("Mission Control starting")
 
     # Ensure DB is initialised and migrations are current
     init_db(DB_PATH)
     run_migrations(DB_PATH)
 
-    log.info("Mission Control ready", port=8860)
+    log.info("Mission Control ready")
     yield
     log.info("Mission Control shutting down")
 
@@ -141,8 +142,11 @@ app.include_router(events_router)          # GET/POST /events/*
 app.include_router(rag_router)             # POST/GET/DELETE /rag/*, GET /api/rag/search
 app.include_router(metrics_router)         # GET /metrics
 app.include_router(governance_router)      # GET /audit, /feature-flags, /prompt-registry, /overrides/*, /lineage/*
+app.include_router(planner_router)         # POST /planner/claude, /planner/local, /planner/cancel, GET /planner/status
 
 
 if __name__ == "__main__":
+    # Use run.py for auto-port-switching and browser launch.
+    # Fallback: direct uvicorn with port 8860.
     import uvicorn
-    uvicorn.run("app.main:app", host="0.0.0.0", port=8860, reload=True)
+    uvicorn.run("app.main:app", host="127.0.0.1", port=8860, reload=False)
