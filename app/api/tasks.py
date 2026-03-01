@@ -9,12 +9,16 @@ POST /tasks/{id}/cancel  → set task_status=cancelled
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import json
+import threading
 import time
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Callable, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from ulid import ULID
 
 from app.core.exceptions import FatalError, MaxLoopsExceeded
@@ -22,6 +26,9 @@ from app.core.execution_loop import ExecutionContext, run_task
 from app.database.async_helpers import run_in_thread
 from app.database.init import get_connection
 from app.models.schemas import (
+    CapabilityClass,
+    ContextTier,
+    RoutingDecision,
     TaskCreate,
     TaskExecuteRequest,
     TaskExecuteResponse,
@@ -47,6 +54,11 @@ def _create_task_sync(req: TaskCreate) -> TaskResponse:
 
     conn = get_connection()
     try:
+        # Auto-create project row if it doesn't exist (avoids FK violation from UI)
+        conn.execute(
+            "INSERT OR IGNORE INTO projects (id, name, created_at) VALUES (?, ?, ?)",
+            (req.project_id, req.project_id, now),
+        )
         conn.execute(
             """
             INSERT INTO tasks
@@ -116,9 +128,9 @@ def _execute_task_sync(
     project_id: str,
     signature: str,
     req: TaskExecuteRequest,
+    on_event: Optional[Callable[[str, dict], None]] = None,
 ) -> TaskExecuteResponse:
-    """Run the ExecutionLoop synchronously (called via run_in_thread)."""
-    # Mark running
+    """Run the ExecutionLoop synchronously (called via run_in_thread or directly)."""
     _set_task_status_sync(task_id, TaskStatus.RUNNING)
 
     messages = [{"role": "user", "content": req.prompt}]
@@ -129,12 +141,10 @@ def _execute_task_sync(
         task_type=task_type,
         messages=messages,
         signature=signature,
+        force_class=req.force_model_class,
+        force_tier=req.force_context_tier,
+        on_event=on_event,
     )
-
-    # Apply optional overrides
-    # (The execution loop routes through AdaptiveRouter; force_* are passed via
-    #  the executor.run() call path. For now, the context carries the task type
-    #  and the router applies its own logic. Direct force overrides are a Phase 3 feature.)
 
     start = time.perf_counter()
     try:
@@ -143,16 +153,25 @@ def _execute_task_sync(
         final_status = TaskStatus.COMPLETED if result.succeeded else TaskStatus.FAILED
         _set_task_status_sync(task_id, final_status)
 
+        routing = result.decision or _null_routing()
+
         return TaskExecuteResponse(
             task_id=task_id,
             task_status=final_status,
             score=result.grading.score,
             passed=result.grading.passed,
             response_text=result.response_text,
-            routing_decision=result.grading.grade_components
-            and _make_routing_stub(result),
+            routing_decision=routing,
             duration_ms=elapsed_ms,
-            retry_count=result.loop_count,
+            retry_count=result.loop_count - 1,  # retries = total loops - 1
+            loop_count=result.loop_count,
+            tokens_generated=result.tokens_generated,
+            tokens_per_second=result.tokens_per_second,
+            thinking_text=result.thinking_text,
+            compile_success=result.grading.compile_success,
+            tests_passed=result.grading.tests_passed,
+            lint_passed=result.grading.lint_passed,
+            runtime_success=result.grading.runtime_success,
         )
 
     except MaxLoopsExceeded as exc:
@@ -167,11 +186,7 @@ def _execute_task_sync(
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
-def _make_routing_stub(result):
-    """Extract the routing decision from the last LoopResult for the response."""
-    # LoopResult doesn't directly carry the RoutingDecision, but ExecutionResult did.
-    # For Phase 2, return a minimal placeholder pulled from the grading components.
-    from app.models.schemas import ContextTier, RoutingDecision
+def _null_routing() -> RoutingDecision:
     return RoutingDecision(
         selected_model="unknown",
         context_size=0,
@@ -223,6 +238,104 @@ async def execute_task(task_id: str, req: TaskExecuteRequest) -> TaskExecuteResp
         project_id,
         task.signature,
         req,
+    )
+
+
+@router.post("/{task_id}/execute/stream")
+async def execute_task_stream(
+    task_id: str, req: TaskExecuteRequest, request: Request
+) -> StreamingResponse:
+    """
+    Stream task execution events via SSE.
+    Emits: started, loop_start, model_response, grading, done, error.
+    """
+    task = await run_in_thread(_get_task_sync, task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found.")
+    if task.task_status == TaskStatus.RUNNING:
+        raise HTTPException(status_code=409, detail="Task is already running.")
+    if task.task_status == TaskStatus.CANCELLED:
+        raise HTTPException(status_code=409, detail="Task has been cancelled.")
+
+    project_id = req.project_id or task.project_id
+    task_type  = TaskType(task.task_type)
+    signature  = task.signature
+
+    event_queue: asyncio.Queue = asyncio.Queue()
+    loop = asyncio.get_event_loop()
+
+    def _on_event(event_type: str, data: dict) -> None:
+        loop.call_soon_threadsafe(event_queue.put_nowait, (event_type, data))
+
+    def _run_in_bg() -> None:
+        try:
+            result = _execute_task_sync(
+                task_id, task_type, project_id, signature, req, on_event=_on_event
+            )
+            # Convert result to a plain dict for the done event
+            done_data = {
+                "task_id":          result.task_id,
+                "task_status":      result.task_status.value,
+                "score":            result.score,
+                "passed":           result.passed,
+                "response_text":    result.response_text,
+                "thinking_text":    result.thinking_text,
+                "duration_ms":      result.duration_ms,
+                "loop_count":       result.loop_count,
+                "retry_count":      result.retry_count,
+                "tokens_generated": result.tokens_generated,
+                "tokens_per_second": result.tokens_per_second,
+                "compile_success":  result.compile_success,
+                "tests_passed":     result.tests_passed,
+                "lint_passed":      result.lint_passed,
+                "runtime_success":  result.runtime_success,
+                "model":            result.routing_decision.selected_model,
+                "tier":             result.routing_decision.context_tier,
+                "context_size":     result.routing_decision.context_size,
+                "routing_reason":   result.routing_decision.routing_reason,
+            }
+            loop.call_soon_threadsafe(event_queue.put_nowait, ("done", done_data))
+        except HTTPException as exc:
+            loop.call_soon_threadsafe(
+                event_queue.put_nowait, ("error", {"content": exc.detail})
+            )
+        except Exception as exc:
+            loop.call_soon_threadsafe(
+                event_queue.put_nowait, ("error", {"content": str(exc)})
+            )
+        finally:
+            loop.call_soon_threadsafe(event_queue.put_nowait, None)  # sentinel
+
+    thread = threading.Thread(target=_run_in_bg, daemon=True)
+    thread.start()
+
+    def _sse(event_type: str, data: dict) -> str:
+        return f"event: {event_type}\ndata: {json.dumps(data)}\n\n"
+
+    async def _generate():
+        try:
+            while True:
+                if await request.is_disconnected():
+                    yield _sse("cancelled", {"content": "Client disconnected."})
+                    break
+                try:
+                    item = await asyncio.wait_for(event_queue.get(), timeout=5.0)
+                except asyncio.TimeoutError:
+                    yield ": ping\n\n"
+                    continue
+                if item is None:
+                    break
+                event_type, data = item
+                yield _sse(event_type, data)
+                if event_type in ("done", "error", "cancelled"):
+                    break
+        except Exception:
+            pass
+
+    return StreamingResponse(
+        _generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 

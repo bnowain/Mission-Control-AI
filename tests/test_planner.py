@@ -383,11 +383,10 @@ class TestPlanWithLocal:
 
         chunks = [self._make_chunk("Hello "), self._make_chunk("world")]
 
-        # get_router is a local import inside plan_with_local; patch the source module
-        with patch("app.router.adaptive.get_router") as mock_router_fn, \
-             patch("litellm.completion", return_value=iter(chunks)):
+        with patch("app.router.adaptive.get_router") as mock_router_fn:
             mock_router = MagicMock()
             mock_router.select.return_value = decision
+            mock_router.complete.return_value = iter(chunks)
             mock_router_fn.return_value = mock_router
 
             collected = []
@@ -422,10 +421,10 @@ class TestPlanWithLocal:
             self._make_chunk("final answer"),
         ]
 
-        with patch("app.router.adaptive.get_router") as mock_router_fn, \
-             patch("litellm.completion", return_value=iter(chunks)):
+        with patch("app.router.adaptive.get_router") as mock_router_fn:
             mock_router = MagicMock()
             mock_router.select.return_value = decision
+            mock_router.complete.return_value = iter(chunks)
             mock_router_fn.return_value = mock_router
 
             collected = []

@@ -103,6 +103,69 @@ export interface TaskExecuteResponse {
   routing_decision: RoutingDecision
   duration_ms: number | null
   retry_count: number
+  loop_count: number
+  tokens_generated: number | null
+  tokens_per_second: number | null
+  thinking_text: string | null
+  compile_success: boolean | null
+  tests_passed: boolean | null
+  lint_passed: boolean | null
+  runtime_success: boolean | null
+}
+
+// ── Task execution streaming ───────────────────────────────────────────────────
+
+export type TaskStreamEventType =
+  | 'started' | 'loop_start' | 'model_response' | 'grading' | 'error' | 'cancelled'
+
+export interface TaskStreamEvent {
+  event_type: TaskStreamEventType
+  timestamp: number
+  // started
+  task_type?: string
+  project_id?: string
+  // loop_start
+  loop?: number
+  retry_count?: number
+  // model_response
+  model?: string
+  tier?: string
+  tokens_generated?: number
+  tokens_per_second?: number
+  duration_ms?: number
+  response_preview?: string
+  // grading
+  score?: number
+  passed?: boolean
+  compile_success?: boolean
+  tests_passed?: boolean
+  lint_passed?: boolean
+  runtime_success?: boolean
+  // error / cancelled
+  content?: string
+}
+
+export interface TaskDoneEvent {
+  task_id: string
+  task_status: string
+  score: number | null
+  passed: boolean | null
+  response_text: string
+  thinking_text: string | null
+  duration_ms: number | null
+  loop_count: number
+  retry_count: number
+  tokens_generated: number | null
+  tokens_per_second: number | null
+  compile_success: boolean | null
+  tests_passed: boolean | null
+  lint_passed: boolean | null
+  runtime_success: boolean | null
+  model: string
+  tier: string
+  context_size: number
+  routing_reason: string
+  cancelled?: boolean
 }
 
 // ── Routing ───────────────────────────────────────────────────────────────────

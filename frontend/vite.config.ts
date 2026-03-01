@@ -32,7 +32,19 @@ export default defineConfig({
     proxy: Object.fromEntries(
       proxyPaths.map(path => [
         path,
-        { target: BACKEND, changeOrigin: true },
+        {
+          target: BACKEND,
+          changeOrigin: true,
+          // Browser navigations (HTML requests) fall through to Vite so the
+          // SPA's index.html is served instead of the backend JSON response.
+          // API calls (fetch/XHR) don't include text/html in Accept, so they
+          // are still proxied correctly.
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          bypass(req: any) {
+            const accept: string = req.headers?.accept ?? ''
+            if (accept.includes('text/html')) return '/'
+          },
+        },
       ])
     ),
   },

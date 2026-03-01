@@ -370,6 +370,14 @@ class TaskExecuteResponse(BaseModel):
     routing_decision: RoutingDecision
     duration_ms: Optional[int] = None
     retry_count: int = 0
+    loop_count: int = 1
+    tokens_generated: Optional[int] = None
+    tokens_per_second: Optional[float] = None
+    thinking_text: Optional[str] = None
+    compile_success: Optional[bool] = None
+    tests_passed: Optional[bool] = None
+    lint_passed: Optional[bool] = None
+    runtime_success: Optional[bool] = None
 
 
 # ---------------------------------------------------------------------------

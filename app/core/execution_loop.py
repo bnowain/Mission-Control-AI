@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Callable, Optional
 
 from app.codex.engine import register_codex_candidate, query_codex
 from app.core.exceptions import (
@@ -39,6 +39,7 @@ from app.models.schemas import (
     ContextTier,
     GradingResult,
     GradingWeights,
+    RoutingDecision,
     TaskType,
 )
 from app.telemetry.logger import log_execution, log_failure
@@ -70,6 +71,11 @@ class ExecutionContext:
     # Phase 7 RAG telemetry (populated by _inject_rag_context)
     rag_chunks_injected: int = 0
     rag_source_ids: list[str] = field(default_factory=list)
+    # Optional overrides — map to ModelExecutor force_class / force_tier
+    force_class: Optional[CapabilityClass] = None
+    force_tier: Optional[ContextTier] = None
+    # Optional streaming callback: on_event(event_type, data) called at each step
+    on_event: Optional[Callable[[str, dict], None]] = None
 
 
 @dataclass
@@ -85,6 +91,18 @@ class LoopResult:
     duration_ms:    Optional[int]
     loop_count:     int
     succeeded:      bool
+    decision:       Optional[RoutingDecision] = None
+    thinking_text:  Optional[str] = None
+
+
+def _emit(ctx: "ExecutionContext", event_type: str, data: dict) -> None:
+    """Fire on_event callback if set. Never raises."""
+    if ctx.on_event is None:
+        return
+    try:
+        ctx.on_event(event_type, {"timestamp": time.time(), **data})
+    except Exception:
+        pass  # never let callback errors kill the execution loop
 
 
 class ExecutionLoop:
@@ -126,6 +144,12 @@ class ExecutionLoop:
         messages       = self._inject_rag_context(ctx)
         messages       = self._inject_codex_guidelines_into(ctx, messages)
 
+        _emit(ctx, "started", {
+            "task_id":   ctx.task_id,
+            "task_type": ctx.task_type.value,
+            "project_id": ctx.project_id,
+        })
+
         while loop_count < MAX_EXECUTION_LOOPS:
             loop_count += 1
             log.info(
@@ -135,6 +159,10 @@ class ExecutionLoop:
                 max_loops=MAX_EXECUTION_LOOPS,
                 retry_count=retry_count,
             )
+            _emit(ctx, "loop_start", {
+                "loop":        loop_count,
+                "retry_count": retry_count,
+            })
 
             # ── Step 1: Model execution ──────────────────────────────
             exc: Optional[Exception] = None
@@ -146,8 +174,19 @@ class ExecutionLoop:
                     task_type=ctx.task_type,
                     messages=messages,
                     retry_count=retry_count,
+                    force_class=ctx.force_class,
+                    force_tier=ctx.force_tier,
                 )
                 retry_count = result.retry_count
+                _emit(ctx, "model_response", {
+                    "loop":             loop_count,
+                    "model":            result.decision.selected_model,
+                    "tier":             result.decision.context_tier.value,
+                    "tokens_generated": result.tokens_generated,
+                    "tokens_per_second": result.tokens_per_second,
+                    "duration_ms":      result.duration_ms,
+                    "response_preview": (result.response_text or "")[:300],
+                })
 
             except MaxRetriesExceeded as e:
                 exc = e
@@ -191,6 +230,16 @@ class ExecutionLoop:
                 downstream_impact=ctx.downstream_impact,
             )
 
+            _emit(ctx, "grading", {
+                "loop":            loop_count,
+                "score":           grading.score,
+                "passed":          grading.passed,
+                "compile_success": validation.compile_success,
+                "tests_passed":    validation.tests_passed,
+                "lint_passed":     validation.lint_passed,
+                "runtime_success": validation.runtime_success,
+            })
+
             # ── Step 4: Log telemetry ─────────────────────────────────
             decision = result.decision if result else _null_decision(ctx.task_type)
 
@@ -233,6 +282,8 @@ class ExecutionLoop:
                     duration_ms=result.duration_ms if result else None,
                     loop_count=loop_count,
                     succeeded=True,
+                    decision=result.decision if result else None,
+                    thinking_text=result.thinking_text if result else None,
                 )
 
             log.warning(

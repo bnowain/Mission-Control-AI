@@ -117,10 +117,22 @@ def plan_with_local(
 
     Returns PlanResult with full accumulated response + thinking.
     """
-    from app.router.adaptive import get_router
     from app.models.schemas import CapabilityClass, TaskType
 
-    router = get_router()
+    try:
+        from app.router.adaptive import get_router
+        router = get_router()
+    except Exception as exc:
+        err_event = PlanEvent(event_type="error", content=f"Router init error: {exc}")
+        on_event(err_event)
+        return PlanResult(
+            response_text="",
+            thinking_text=None,
+            events=[err_event],
+            duration_ms=0,
+            model_used=model_class,
+            cancelled=False,
+        )
 
     # Map model_class string → CapabilityClass
     cap_class_map = {
