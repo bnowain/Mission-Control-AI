@@ -23,3 +23,6 @@ include = ["cli*"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "e2e: Playwright end-to-end tests (require running backend + frontend servers)",
+]
